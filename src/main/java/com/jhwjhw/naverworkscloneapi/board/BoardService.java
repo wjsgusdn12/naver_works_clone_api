@@ -444,13 +444,7 @@ public class BoardService {
     private BoardResponse.PostDetail detail(Viewer viewer, BoardPost post) {
         Long postId = post.getId();
         boolean author = isAuthor(viewer, post);
-        List<BoardResponse.Comment> comments = commentRepository.findVisibleByPostId(postId).stream()
-                .map(comment -> new BoardResponse.Comment(comment.getId(), comment.getAuthor().getId(),
-                        comment.getAuthor().getUserAccount().getDisplayName(),
-                        comment.getAuthor().effectiveRole() == Role.ADMIN, comment.getContent(), comment.getCreatedAt(),
-                        !post.isDeleted() && (viewer.admin()
-                                || comment.getAuthor().getId().equals(viewer.id()))))
-                .toList();
+        List<BoardResponse.Comment> comments = comments(viewer, post);
         List<BoardResponse.Attachment> attachments = attachmentRepository.findByPostIdOrderById(postId).stream()
                 .map(BoardService::attachment).toList();
         boolean favorite = favoriteRepository.findByMembershipIdAndBoardId(viewer.id(), post.getBoard().getId())
@@ -466,6 +460,29 @@ public class BoardService {
                 canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
                 !post.isDeleted() && post.isPublished() && post.isAllowComment(), post.getStatus(), post.getPublishAt(),
                 post.isAllowComment(), post.isCommentNotify(), reactions(viewer, postId), live);
+    }
+
+    // 댓글과 답글(오래된 순). 지운 댓글에 답글이 남아 있으면 그 자리를 "삭제된 댓글"로 남겨 답글이 떠다니지 않게 함.
+    private List<BoardResponse.Comment> comments(Viewer viewer, BoardPost post) {
+        List<BoardComment> visible = commentRepository.findVisibleByPostId(post.getId());
+        Set<Long> visibleIds = visible.stream().map(BoardComment::getId).collect(Collectors.toSet());
+        Set<Long> deletedParents = visible.stream().filter(comment -> comment.getParent() != null)
+                .map(comment -> comment.getParent().getId()).filter(id -> !visibleIds.contains(id))
+                .collect(Collectors.toSet());
+        List<BoardResponse.Comment> result = new ArrayList<>(visible.stream()
+                .map(comment -> new BoardResponse.Comment(comment.getId(),
+                        comment.getParent() == null ? null : comment.getParent().getId(), comment.getAuthor().getId(),
+                        comment.getAuthor().getUserAccount().getDisplayName(),
+                        comment.getAuthor().effectiveRole() == Role.ADMIN, comment.getContent(), comment.getCreatedAt(),
+                        !post.isDeleted() && (viewer.admin() || comment.getAuthor().getId().equals(viewer.id())),
+                        false))
+                .toList());
+        for (BoardComment parent : commentRepository.findAllById(deletedParents)) {
+            result.add(new BoardResponse.Comment(parent.getId(), null, null, null, false, "", parent.getCreatedAt(),
+                    false, true));
+        }
+        result.sort(Comparator.comparing(BoardResponse.Comment::id));
+        return result;
     }
 
     // 리액션을 이모지별로 묶음(먼저 눌린 이모지가 앞). 누른 사람 이름은 누른 순서.
@@ -656,12 +673,20 @@ public class BoardService {
         }
         String text = request.content().strip();
         if (text.isEmpty()) throw new BoardException("BOARD_COMMENT_EMPTY", "댓글을 입력해 주세요.");
-        commentRepository.save(new BoardComment(post, viewer.me(), text));
+        // 답글: 같은 글의 지우지 않은 댓글에만. 답글에 답하면 그 맨 위 댓글 아래로(한 단계만).
+        BoardComment target = null;
+        if (request.parentId() != null) {
+            target = commentRepository.findById(request.parentId())
+                    .filter(found -> found.getDeletedAt() == null && found.getPost().getId().equals(postId))
+                    .orElseThrow(() -> new BoardException("BOARD_COMMENT_NOT_FOUND", "답글을 달 댓글을 찾을 수 없습니다."));
+        }
+        BoardComment root = target == null ? null : target.getParent() == null ? target : target.getParent();
+        commentRepository.save(new BoardComment(post, viewer.me(), text, root));
         boolean answer = post.getBoard().getType() == BoardType.INQUIRY && viewer.admin();
         postRepository.changeCommentCount(postId, 1);
         postRepository.touchActivity(postId, Instant.now());
         if (answer) postRepository.markAnswered(postId, Instant.now());
-        notifyComment(viewer, post, text, answer);
+        notifyComment(viewer, post, text, answer, target);
         return detail(membershipId, postId);
     }
 
@@ -726,10 +751,16 @@ public class BoardService {
     }
 
     // 내 글에 남이 댓글을 달면 글쓴이에게. 문의하기에 관리자가 달면 "문의 답변 완료".
-    private void notifyComment(Viewer viewer, BoardPost post, String text, boolean answer) {
-        Long authorId = post.getAuthor().getId();
-        if (authorId.equals(viewer.id()) || !post.isCommentNotify()) return;
+    // 답글이면 답한 댓글의 작성자에게 "새 답글"(그 사람이 글쓴이면 아래 글쓴이 알림 하나만).
+    private void notifyComment(Viewer viewer, BoardPost post, String text, boolean answer, BoardComment target) {
         String writer = viewer.me().getUserAccount().getDisplayName();
+        Long authorId = post.getAuthor().getId();
+        Long targetAuthorId = target == null ? null : target.getAuthor().getId();
+        if (targetAuthorId != null && !targetAuthorId.equals(viewer.id()) && !targetAuthorId.equals(authorId)) {
+            notificationService.create(targetAuthorId, NotificationCategory.SYSTEM, "새 답글",
+                    writer + "님 (" + post.getTitle() + "): " + text, postLink(post));
+        }
+        if (authorId.equals(viewer.id()) || !post.isCommentNotify()) return;
         notificationService.create(authorId, NotificationCategory.SYSTEM, answer ? "문의 답변 완료" : "새 댓글",
                 writer + "님 (" + post.getTitle() + "): " + text, postLink(post));
     }

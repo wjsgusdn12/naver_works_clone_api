@@ -50,7 +50,11 @@ public final class BoardRequest {
         }
     }
 
-    public record CommentCreate(@NotBlank @Size(max = 1000) String content) {
+    // parentId: 답글이면 답할 댓글(답글에 답하면 같은 맨 위 댓글 아래로 붙음)
+    public record CommentCreate(@NotBlank @Size(max = 1000) String content, Long parentId) {
+        public CommentCreate(String content) {
+            this(content, null);
+        }
     }
 
     // 글 리액션. 같은 이모지를 다시 누르면 취소, 다른 이모지면 바꿈.

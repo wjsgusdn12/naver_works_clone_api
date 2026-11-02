@@ -45,8 +45,9 @@ public final class BoardResponse {
             Integer width, Integer height, boolean inline) {
     }
 
-    public record Comment(Long id, Long authorMembershipId, String authorName, boolean authorAdmin, String content,
-            Instant createdAt, boolean canDelete) {
+    // parentId: 답글이면 맨 위 댓글 ID. deleted: 지웠지만 답글이 남아 자리만 보여 주는 댓글(글쓴이·내용 없음).
+    public record Comment(Long id, Long parentId, Long authorMembershipId, String authorName, boolean authorAdmin,
+            String content, Instant createdAt, boolean canDelete, boolean deleted) {
     }
 
     // 글 리액션 한 종류. mine: 내가 누른 이모지, names: 누른 사람(누른 순서)
