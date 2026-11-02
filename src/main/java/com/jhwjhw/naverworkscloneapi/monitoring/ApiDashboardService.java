@@ -87,13 +87,62 @@ public class ApiDashboardService {
                         status.realtimeConnections(), status.instanceId().equals(reporter.instanceId())))
                 .toList();
 
+        MetricsBucket previous = previousTotal(range, period.trend().getFirst().startAt(), now);
         return new ApiDashboardResponse(now, zone.getId(), store.mode(), databaseStatus(), servers, range.name(),
-                summary(period.total()), period.trend(), period.ranking());
+                summary(period.total()), summary(previous), period.trend(), period.ranking());
     }
 
     // 한 기간의 계산 결과: 숫자 카드용 합계, 그래프 점, 순위.
     private record Period(MetricsBucket total, List<ApiDashboardResponse.TrendPoint> trend,
             ApiDashboardResponse.Ranking ranking) {
+    }
+
+    // 직전 같은 길이 기간의 합계(숫자 카드 증감 비교용). 지금 창 [windowStart, now)를 기간 길이만큼 앞으로 민 구간.
+    // 최근 60분은 5분 칸, 나머지는 1시간 요약으로 셈. 구간 경계에 걸친 칸은 겹친 시간 비율만큼만 더함(추정).
+    private MetricsBucket previousTotal(Range range, Instant windowStart, Instant now) {
+        Duration length = switch (range) {
+            case HOUR -> Duration.ofMinutes(HOUR_MINUTES);
+            case DAY -> Duration.ofHours(DAY_HOURS);
+            case WEEK -> Duration.ofHours(WEEK_HOURS);
+            case MONTH -> Duration.ofHours(MONTH_HOURS);
+        };
+        Instant from = windowStart.minus(length);
+        Instant to = now.minus(length);
+        MetricsBucket total = new MetricsBucket();
+        if (range == Range.HOUR) {
+            long first = ApiMetricsRecorder.bucketOf(from);
+            bucketRepository.read(ApiMetricBucketRepository.Ring.FIVE_MINUTES, first, ApiMetricsRecorder.bucketOf(to))
+                    .forEach((bucket, data) -> {
+                        Instant start = Instant.ofEpochSecond(bucket * ApiMetricsRecorder.BUCKET_SECONDS);
+                        total.add(portion(data, overlapSeconds(start, ApiMetricsRecorder.BUCKET_SECONDS, from, to),
+                                ApiMetricsRecorder.BUCKET_SECONDS));
+                    });
+            return total;
+        }
+        hourlyRepository.readTotals(ApiMetricsRecorder.hourOf(from)).forEach((hour, data) -> {
+            if (hour.isBefore(to)) total.add(portion(data, overlapSeconds(hour, 3600, from, to), 3600));
+        });
+        return total;
+    }
+
+    // [start, start+spanSeconds) 칸이 [from, to)와 겹치는 초
+    private static long overlapSeconds(Instant start, long spanSeconds, Instant from, Instant to) {
+        long begin = Math.max(start.getEpochSecond(), from.getEpochSecond());
+        long end = Math.min(start.getEpochSecond() + spanSeconds, to.getEpochSecond());
+        return Math.max(0, end - begin);
+    }
+
+    // 칸 하나 중 겹친 시간(overlap/span) 비율만큼의 몫(요청이 칸 안에 고르게 왔다고 보는 추정). 다 겹치면 그대로.
+    static MetricsBucket portion(MetricsBucket data, long overlap, long span) {
+        if (overlap >= span) return data;
+        MetricsBucket part = new MetricsBucket();
+        if (overlap <= 0) return part;
+        double ratio = (double) overlap / span;
+        part.addTotals(Math.round(data.getCount() * ratio), Math.round(data.getClientErrors() * ratio),
+                Math.round(data.getServerErrors() * ratio), Math.round(data.getDurationSumMs() * ratio));
+        long[] latency = data.getLatencyCounts();
+        for (int bin = 0; bin < latency.length; bin++) part.addLatency(bin, Math.round(latency[bin] * ratio));
+        return part;
     }
 
     // 최근 60분: 지금 분을 포함해 1분 칸 60개(정각이 지나도 비지 않고 계속 밀려감).

@@ -254,6 +254,37 @@ class ApiDashboardTests {
         });
     }
 
+    // 숫자 카드 증감 비교: 직전 같은 길이 기간(최근 7일이면 그 전 7일)의 합계가 따로 내려오고, 지금 기간에는 섞이지 않음.
+    @Test
+    void previousPeriodSummaryIsReturnedForComparison() {
+        // 지금 시간에서 200시간 전 = 직전 7일 구간(168~336시간 전) 안의 온전한 한 시간
+        Instant hour = ApiMetricsRecorder.hourOf(Instant.now()).minusSeconds(200 * 3600L);
+        MetricsBucket past = new MetricsBucket();
+        for (int i = 0; i < 9; i++) past.record("GET /api/v1/lastWeekOnly", 500, 80);
+        hourlyRepository.addHour(hour, past);
+
+        ApiDashboardResponse week = dashboardService.dashboard(ApiDashboardService.Range.WEEK);
+        assertThat(week.previousSummary().requests()).isGreaterThanOrEqualTo(9);
+        assertThat(week.previousSummary().serverErrors()).isGreaterThanOrEqualTo(9);
+        assertThat(week.ranking().top()).noneMatch(stat -> stat.endpoint().equals("GET /api/v1/lastWeekOnly"));
+        // 최근 30일 탭에서는 그 시간이 지금 기간 쪽에 들어감.
+        ApiDashboardResponse month = dashboardService.dashboard(ApiDashboardService.Range.MONTH);
+        assertThat(month.summary().serverErrors()).isGreaterThanOrEqualTo(9);
+    }
+
+    // 경계에 걸친 칸은 겹친 시간 비율만큼만 더함(5분 칸 300건 중 1분 겹치면 60건). 다 겹치면 그대로.
+    @Test
+    void portionSplitsBucketByOverlappingTime() {
+        MetricsBucket bucket = new MetricsBucket();
+        for (int i = 0; i < 300; i++) bucket.record("GET /api/v1/x", i < 30 ? 500 : 200, 100);
+        MetricsBucket part = ApiDashboardService.portion(bucket, 60, 300);
+        assertThat(part.getCount()).isEqualTo(60);
+        assertThat(part.getServerErrors()).isEqualTo(6);
+        assertThat(part.getDurationSumMs()).isEqualTo(6000);
+        assertThat(ApiDashboardService.portion(bucket, 300, 300)).isSameAs(bucket);
+        assertThat(ApiDashboardService.portion(bucket, 0, 300).getCount()).isZero();
+    }
+
     // 최근 24시간 창이 시간 중간에서 시작하면, 그 첫 시간의 1시간 요약은 창 안에 든 5분 칸 몫만 들어감.
     @Test
     void last24HoursCountsOnlyPartOfFirstHour() {

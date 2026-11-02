@@ -3,11 +3,13 @@ package com.jhwjhw.naverworkscloneapi.monitoring;
 import java.time.Instant;
 import java.util.List;
 
-// 홈 화면 API 대시보드 응답. 화면이 고른 기간(range) 하나만 담음. 기간은 달력 기준(zone 시간대).
+// 홈 화면 API 대시보드 응답. 화면이 고른 기간(range) 하나만 담음. 기간은 지금부터 거꾸로 밀려가는 창.
 // mode: SHARED(서버 목록 통합, Redis) / LOCAL(서버 목록은 이 서버만, 로컬 개발). 요청 집계는 항상 DB 기준.
 // trend: HOUR 최근 60분 1분×60, DAY 최근 24시간 5분×288, WEEK 최근 7일 1시간×168, MONTH 최근 30일 1시간×720
+// previousSummary: 직전 같은 길이 기간(지금 창을 기간 길이만큼 앞으로 민 구간)의 합계. 숫자 카드 증감 표시용.
 public record ApiDashboardResponse(Instant generatedAt, String zone, String mode, String database,
-        List<Server> servers, String range, Summary summary, List<TrendPoint> trend, Ranking ranking) {
+        List<Server> servers, String range, Summary summary, Summary previousSummary, List<TrendPoint> trend,
+        Ranking ranking) {
 
     // 기간 합계. errorRate는 5xx(서버 오류) 비율(%), p95Ms가 -1이면 5초 초과.
     public record Summary(long requests, long clientErrors, long serverErrors, double errorRate, long avgMs,
