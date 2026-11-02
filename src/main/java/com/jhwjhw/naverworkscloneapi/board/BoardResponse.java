@@ -17,9 +17,10 @@ public final class BoardResponse {
     public record Sidebar(List<BoardItem> boards, boolean admin) {
     }
 
-    // 목록의 글 한 줄. read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지, answered: 문의하기 답변 완료.
-    public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String title,
-            String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
+    // 목록의 글 한 줄. companyName: 그 게시판의 회사, read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지,
+    // answered: 문의하기 답변 완료.
+    public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String companyName,
+            String title, String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
             boolean mustRead, boolean read, int viewCount, int commentCount, boolean hasFile, boolean answered,
             Instant deletedAt) {
     }

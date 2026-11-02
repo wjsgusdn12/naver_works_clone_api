@@ -70,9 +70,9 @@ public class BoardService {
     private final BoardContent content;
     private final ChatAttachmentStore attachmentStore;
 
-    // 목록 종류(사이드바 메뉴)
+    // 목록 종류(사이드바 메뉴). TYPE: 볼 수 있는 게시판 중 한 종류(공지·자유·문의) 전체를 한 목록으로(관리자는 모든 회사).
     public enum View {
-        LATEST, MUST_READ, IMPORTANT, MINE, BOARD, TRASH
+        LATEST, MUST_READ, IMPORTANT, MINE, BOARD, TYPE, TRASH
     }
 
     // 요청한 사람과 관리자 여부
@@ -204,14 +204,27 @@ public class BoardService {
 
     @Transactional(readOnly = true)
     public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, Long cursor) {
+        return list(membershipId, view, boardId, null, cursor);
+    }
+
+    @Transactional(readOnly = true)
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Long cursor) {
         Viewer viewer = viewer(membershipId);
-        if (view == View.BOARD) {
-            if (boardId == null) throw new BoardException("BOARD_REQUIRED", "게시판을 골라 주세요.");
-            List<Long> one = List.of(viewableBoard(viewer, boardId).getId());
+        if (view == View.BOARD || view == View.TYPE) {
+            List<Long> scope;
+            if (view == View.BOARD) {
+                if (boardId == null) throw new BoardException("BOARD_REQUIRED", "게시판을 골라 주세요.");
+                scope = List.of(viewableBoard(viewer, boardId).getId());
+            } else {
+                if (type == null) throw new BoardException("BOARD_REQUIRED", "게시판 종류를 골라 주세요.");
+                scope = visibleBoards(viewer).stream().filter(board -> board.getType() == type).map(Board::getId)
+                        .toList();
+            }
+            // 첫 페이지에만 중요 글을 맨 위 고정으로 따로 주고, 아래 목록에서는 뺌.
             List<BoardResponse.PostSummary> pinned = cursor == null
-                    ? summaries(viewer, find(viewer, one, false, true, false, false, null, PINNED_MAX))
+                    ? summaries(viewer, find(viewer, scope, false, true, false, false, null, PINNED_MAX))
                     : List.of();
-            return page(viewer, pinned, find(viewer, one, false, false, true, false, cursor, PAGE_SIZE + 1));
+            return page(viewer, pinned, find(viewer, scope, false, false, true, false, cursor, PAGE_SIZE + 1));
         }
         List<Long> boardIds = ids(visibleBoards(viewer));
         if (view == View.TRASH) {
@@ -248,7 +261,8 @@ public class BoardService {
         Set<Long> read = new HashSet<>(readRepository.findReadPostIds(viewer.id(), postIds));
         Set<Long> withFiles = new HashSet<>(attachmentRepository.findPostIdsWithFiles(postIds));
         return posts.stream().map(post -> new BoardResponse.PostSummary(post.getId(), post.getBoard().getId(),
-                post.getBoard().getName(), post.getBoard().getType(), post.getTitle(), preview(post.getContentText()),
+                post.getBoard().getName(), post.getBoard().getType(), post.getBoard().getCompany().getName(),
+                post.getTitle(), preview(post.getContentText()),
                 post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
                 post.isImportant(), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,

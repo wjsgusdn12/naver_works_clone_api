@@ -15,7 +15,8 @@ import org.springframework.data.repository.query.Param;
 public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     // 글 목록(최신순, cursor보다 작은 id). 볼 수 있는 게시판(boardIds) 안에서만 찾고,
     // 관리자가 아니면 남의 문의하기 글(hiddenType)은 뺌. 필터는 false면 적용하지 않음.
-    @Query("select p from BoardPost p join fetch p.board b join fetch p.author a join fetch a.userAccount "
+    @Query("select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
+            + "join fetch a.userAccount "
             + "where b.id in :boardIds and p.deletedAt is null and p.id < :cursor "
             + "and (:admin = true or b.type <> :hiddenType or a.id = :me) "
             + "and (:mustRead = false or p.mustRead = true) "
@@ -30,7 +31,8 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             @Param("cursor") long cursor, Pageable pageable);
 
     // 휴지통: since 이후에 지운 글. 관리자가 아니면 내가 지운 글만.
-    @Query("select p from BoardPost p join fetch p.board b join fetch p.author a join fetch a.userAccount "
+    @Query("select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
+            + "join fetch a.userAccount "
             + "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since and p.id < :cursor "
             + "and (:admin = true or p.deletedBy.id = :me) "
             + "order by p.id desc")

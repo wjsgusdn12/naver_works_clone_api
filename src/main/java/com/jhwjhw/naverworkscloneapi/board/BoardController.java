@@ -1,6 +1,7 @@
 package com.jhwjhw.naverworkscloneapi.board;
 
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardAttachment;
+import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatAttachmentKind;
 import com.jhwjhw.naverworkscloneapi.common.response.ApiResponse;
 import jakarta.validation.Valid;
@@ -53,13 +54,14 @@ public class BoardController {
         return ApiResponse.success("BOARD_HOME_FOUND", "게시판 홈을 조회했습니다.", service.home(id(jwt)));
     }
 
-    // 글 목록. view: LATEST(최신글)·MUST_READ(필독)·IMPORTANT(중요)·MINE(내 게시글)·BOARD(게시판, boardId 필요)·TRASH(휴지통)
+    // 글 목록. view: LATEST(최신글)·MUST_READ(필독)·IMPORTANT(중요)·MINE(내 게시글)·BOARD(게시판, boardId 필요)·
+    // TYPE(공지·자유·문의 같은 종류 전체, type 필요)·TRASH(휴지통)
     @GetMapping("/post/list")
     public ApiResponse<BoardResponse.PostPage> list(@AuthenticationPrincipal Jwt jwt,
             @RequestParam BoardService.View view, @RequestParam(required = false) Long boardId,
-            @RequestParam(required = false) Long cursor) {
+            @RequestParam(required = false) BoardType type, @RequestParam(required = false) Long cursor) {
         return ApiResponse.success("BOARD_POST_LIST_FOUND", "글 목록을 조회했습니다.",
-                service.list(id(jwt), view, boardId, cursor));
+                service.list(id(jwt), view, boardId, type, cursor));
     }
 
     // 글 보기. 처음 여는 것이면 읽음 기록·조회수 1.

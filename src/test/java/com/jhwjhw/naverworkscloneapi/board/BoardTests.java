@@ -131,6 +131,26 @@ class BoardTests {
     }
 
     @Test
+    void typeViewGathersOneKindOfBoardAcrossCompaniesForAdminOnly() {
+        var mine = service.create(admin.getId(), new BoardRequest.PostCreate(
+                board(admin, BoardType.NOTICE, company.getName()).id(), "우리 회사 공지", doc("x"), true, false,
+                List.of()));
+        var others = write(admin, board(admin, BoardType.NOTICE, "가상 다른 회사").id(), "다른 회사 공지");
+        write(admin, board(admin, BoardType.FREE, company.getName()).id(), "자유 글");
+
+        var adminPage = service.list(admin.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null);
+        assertThat(adminPage.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(mine.id());
+        assertThat(ids(adminPage)).containsExactly(others.id());
+        assertThat(adminPage.items().getFirst().companyName()).isEqualTo("가상 다른 회사");
+        // 일반 사용자는 자기 회사 공지만
+        var userPage = service.list(me.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null);
+        assertThat(userPage.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(mine.id());
+        assertThat(userPage.items()).isEmpty();
+        assertThatThrownBy(() -> service.list(me.getId(), BoardService.View.TYPE, null, null, null))
+                .isInstanceOf(BoardException.class);
+    }
+
+    @Test
     void departmentPostsStayInsideTheDepartment() {
         var post = write(me, department(me, sales).id(), "영업팀 회의");
         assertThat(ids(service.list(colleague.getId(), BoardService.View.LATEST, null, null)))
