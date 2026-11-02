@@ -12,8 +12,11 @@ import static org.hamcrest.Matchers.startsWith;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoom;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomMember;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomType;
+import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatRoomMemberRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatRoomRepository;
+import com.jhwjhw.naverworkscloneapi.common.storage.FileStorage;
+import com.jhwjhw.naverworkscloneapi.common.storage.LocalFileStorage;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Company;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Membership;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Role;
@@ -22,16 +25,22 @@ import com.jhwjhw.naverworkscloneapi.identity.repository.CompanyRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.MembershipRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.UserAccountRepository;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -42,6 +51,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(properties = {
         "spring.flyway.enabled=false", "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -60,6 +70,9 @@ class ChatAttachmentTests {
     @Autowired private ChatRoomMemberRepository participants;
     @Autowired private MockMvc mvc;
     @Autowired private JwtEncoder encoder;
+    @Autowired private ChatMessageAttachmentRepository attachmentRepository;
+    @Autowired private FileStorage storage;
+    @Autowired private TransactionTemplate transaction;
 
     private Membership author;
     private Membership stranger;
@@ -114,7 +127,7 @@ class ChatAttachmentTests {
         assertThat(sent.attachment().height()).isEqualTo(2);
         assertThat(sent.attachment().size()).isEqualTo(file.getSize());
 
-        ChatRoomService.AttachmentFile download = service.attachmentFile(author.getId(), sent.attachment().id());
+        ChatRoomService.AttachmentFile download = service.attachmentFile(author.getId(), sent.attachment().id(), false);
         try (InputStream in = download.resource().getInputStream()) {
             assertThat(in.readAllBytes()).isEqualTo(file.getBytes());
         }
@@ -154,7 +167,7 @@ class ChatAttachmentTests {
         assertThatThrownBy(() -> service.sendAttachment(stranger.getId(), room.getId(), png("a.png"), null))
                 .isInstanceOf(ChatException.class);
         Long attachmentId = service.sendAttachment(author.getId(), room.getId(), png("a.png"), null).attachment().id();
-        assertThatThrownBy(() -> service.attachmentFile(stranger.getId(), attachmentId))
+        assertThatThrownBy(() -> service.attachmentFile(stranger.getId(), attachmentId, false))
                 .isInstanceOf(ChatException.class);
         assertThatThrownBy(() -> service.attachments(stranger.getId(), room.getId(), "IMAGE", null))
                 .isInstanceOf(ChatException.class);
@@ -166,7 +179,7 @@ class ChatAttachmentTests {
         ChatRoomResponse.Message sent = service.sendAttachment(author.getId(), room.getId(), png("a.png"), null);
         ChatRoomResponse.Message deleted = service.deleteMessage(author.getId(), room.getId(), sent.id(), 0L);
         assertThat(deleted.attachment()).isNull();
-        assertThatThrownBy(() -> service.attachmentFile(author.getId(), sent.attachment().id()))
+        assertThatThrownBy(() -> service.attachmentFile(author.getId(), sent.attachment().id(), false))
                 .isInstanceOf(ChatException.class).hasMessageContaining("찾을 수 없습니다");
         assertThat(service.attachments(author.getId(), room.getId(), "IMAGE", null).items()).isEmpty();
     }
@@ -197,7 +210,7 @@ class ChatAttachmentTests {
         assertThat(copy.forwarded()).isTrue();
         assertThat(copy.attachment().id()).isNotEqualTo(sent.attachment().id());
         assertThat(copy.attachment().name()).isEqualTo("a.png");
-        assertThat(service.attachmentFile(author.getId(), copy.attachment().id()).resource().exists()).isTrue();
+        assertThat(service.attachmentFile(author.getId(), copy.attachment().id(), false).resource().exists()).isTrue();
     }
 
     // 모아보기는 종류별 최신순이고 30개씩 끊어 다음 위치를 알려 줌.
@@ -249,5 +262,178 @@ class ChatAttachmentTests {
         mvc.perform(get("/api/v1/chatRoom/message/attachment/download").param("attachmentId", imageId.toString())
                 .header("Authorization", "Bearer " + token(stranger)))
                 .andExpect(status().isBadRequest());
+    }
+
+    // 가로 width, 세로 height짜리 진짜 JPEG. exifOrientation이 1이 아니면 휴대폰 사진처럼 회전 정보(EXIF)를 넣음.
+    private static MockMultipartFile jpeg(String name, int width, int height, int exifOrientation) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB), "jpg", out);
+        byte[] plain = out.toByteArray();
+        if (exifOrientation == 1) return new MockMultipartFile("file", name, "image/jpeg", plain);
+        // APP1(FFE1) = "Exif\0\0" + TIFF(MM, IFD0 위치 8) + 항목 1개(0x0112 회전, SHORT) + 다음 IFD 없음
+        byte[] exif = {
+                'E', 'x', 'i', 'f', 0, 0,
+                'M', 'M', 0, 42, 0, 0, 0, 8,
+                0, 1,
+                0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, (byte) exifOrientation, 0, 0,
+                0, 0, 0, 0 };
+        ByteArrayOutputStream withExif = new ByteArrayOutputStream();
+        withExif.write(plain, 0, 2); // FFD8
+        withExif.write(new byte[] { (byte) 0xFF, (byte) 0xE1, 0, (byte) (exif.length + 2) });
+        withExif.write(exif);
+        withExif.write(plain, 2, plain.length - 2);
+        return new MockMultipartFile("file", name, "image/jpeg", withExif.toByteArray());
+    }
+
+    private static BufferedImage decode(ChatRoomService.AttachmentFile file) throws IOException {
+        try (InputStream in = file.resource().getInputStream()) {
+            return ImageIO.read(in);
+        }
+    }
+
+    // 큰 사진은 긴 변 480px 작은 사본을 따로 저장. 말풍선용(thumbnail=true)은 작은 사본, 내려받기는 원본 그대로.
+    @Test
+    void largeImageGetsThumbnailAndOriginalStaysIntact() throws IOException {
+        MockMultipartFile file = jpeg("big.jpg", 1200, 800, 1);
+        ChatRoomResponse.Message sent = service.sendAttachment(author.getId(), room.getId(), file, null);
+        Long id = sent.attachment().id();
+        assertThat(attachmentRepository.findById(id).orElseThrow().getThumbnailKey()).isNotNull();
+
+        ChatRoomService.AttachmentFile thumbnail = service.attachmentFile(author.getId(), id, true);
+        BufferedImage small = decode(thumbnail);
+        assertThat(small.getWidth()).isEqualTo(ChatImageThumbnail.MAX_SIDE);
+        assertThat(small.getHeight()).isEqualTo(320);
+        assertThat(thumbnail.size()).isLessThan(file.getSize());
+
+        ChatRoomService.AttachmentFile original = service.attachmentFile(author.getId(), id, false);
+        try (InputStream in = original.resource().getInputStream()) {
+            assertThat(in.readAllBytes()).isEqualTo(file.getBytes());
+        }
+        // 전달한 복사본도 같은 작은 사본을 씀.
+        ChatRoomResponse.Message copy = service.forwardMessage(author.getId(), room.getId(), sent.id(),
+                List.of(targetRoom.getId())).getFirst();
+        assertThat(attachmentRepository.findById(copy.attachment().id()).orElseThrow().getThumbnailKey())
+                .isEqualTo(attachmentRepository.findById(id).orElseThrow().getThumbnailKey());
+    }
+
+    // 작은 사진은 작은 사본을 만들지 않고, thumbnail=true로 달라고 해도 원본을 줌.
+    @Test
+    void smallImageServesOriginalAsThumbnail() throws IOException {
+        MockMultipartFile file = png("tiny.png");
+        Long id = service.sendAttachment(author.getId(), room.getId(), file, null).attachment().id();
+        assertThat(attachmentRepository.findById(id).orElseThrow().getThumbnailKey()).isNull();
+        try (InputStream in = service.attachmentFile(author.getId(), id, true).resource().getInputStream()) {
+            assertThat(in.readAllBytes()).isEqualTo(file.getBytes());
+        }
+    }
+
+    // 휴대폰 세로 사진(회전값 6 = 시계 방향 90도): 화면 자리 크기와 작은 사본 모두 세워서 맞춤.
+    @Test
+    void exifRotatedPhotoIsStoredUpright() throws IOException {
+        MockMultipartFile file = jpeg("portrait.jpg", 600, 300, 6);
+        assertThat(ChatImageThumbnail.jpegOrientation(file)).isEqualTo(6);
+        ChatRoomResponse.Message sent = service.sendAttachment(author.getId(), room.getId(), file, null);
+        assertThat(sent.attachment().width()).isEqualTo(300);
+        assertThat(sent.attachment().height()).isEqualTo(600);
+        BufferedImage small = decode(service.attachmentFile(author.getId(), sent.attachment().id(), true));
+        assertThat(small.getWidth()).isEqualTo(240);
+        assertThat(small.getHeight()).isEqualTo(480);
+    }
+
+    // 1분 개수 제한과 하루 용량 제한. 전달한 복사본은 새 업로드가 아니라 세지 않음.
+    @Test
+    void uploadLimiterBlocksBurstsAndDailyQuota() throws IOException {
+        ChatRoomResponse.Message first = service.sendAttachment(author.getId(), room.getId(), png("1.png"), null);
+        service.sendAttachment(author.getId(), room.getId(), png("2.png"), null);
+        service.forwardMessage(author.getId(), room.getId(), first.id(), List.of(targetRoom.getId()));
+
+        ChatUploadLimiter perMinute = new ChatUploadLimiter(attachmentRepository, Clock.systemUTC(), 2,
+                Long.MAX_VALUE);
+        assertThatThrownBy(() -> perMinute.check(author.getId(), 10))
+                .isInstanceOf(ChatException.class).hasMessageContaining("너무 빠르게");
+        // 다른 사람은 영향 없음.
+        perMinute.check(stranger.getId(), 10);
+        // 1분이 지나면 다시 가능(개수 제한은 최근 1분만 셈).
+        new ChatUploadLimiter(attachmentRepository,
+                Clock.offset(Clock.systemUTC(), Duration.ofMinutes(2)), 2, Long.MAX_VALUE)
+                .check(author.getId(), 10);
+
+        long used = attachmentRepository.sumUploadBytesSince(author.getId(), Instant.now().minusSeconds(3600));
+        assertThat(used).isEqualTo(png("x.png").getSize() * 2);
+        ChatUploadLimiter daily = new ChatUploadLimiter(attachmentRepository, Clock.systemUTC(), 1000,
+                used + 100);
+        daily.check(author.getId(), 100);
+        assertThatThrownBy(() -> daily.check(author.getId(), 101))
+                .isInstanceOf(ChatException.class).hasMessageContaining("하루");
+    }
+
+    // 디스크에 남을 공간이 기준보다 적으면 저장하지 않고 거절(디스크가 가득 차 서버가 멈추는 것을 막음).
+    @Test
+    void uploadIsRejectedWhenStorageIsAlmostFull() {
+        ChatAttachmentStore almostFull = new ChatAttachmentStore(storage, Long.MAX_VALUE);
+        assertThatThrownBy(() -> almostFull.store(text("a.txt", "x", "text/plain")))
+                .isInstanceOf(ChatException.class).hasMessageContaining("저장 공간");
+    }
+
+    // 보관 기간(30일)이 지난 삭제 메시지의 파일 정리. 전달한 복사본이 살아 있으면 파일은 남기고, 복사본까지 끝나면 지움.
+    @Test
+    void cleanupPurgesExpiredFilesButKeepsFilesStillInUse() throws IOException {
+        ChatRoomResponse.Message sent = service.sendAttachment(author.getId(), room.getId(),
+                jpeg("shared.jpg", 1200, 800, 1), null);
+        ChatRoomResponse.Message copy = service.forwardMessage(author.getId(), room.getId(), sent.id(),
+                List.of(targetRoom.getId())).getFirst();
+        String key = attachmentRepository.findById(sent.attachment().id()).orElseThrow().getStorageKey();
+        String thumbnailKey = attachmentRepository.findById(sent.attachment().id()).orElseThrow().getThumbnailKey();
+        service.deleteMessage(author.getId(), room.getId(), sent.id(), 0L);
+
+        // 31일 뒤의 청소. 고아 파일 정리는 이 테스트 대상이 아니라 아주 길게 잡아 건드리지 않음.
+        Clock later = Clock.offset(Clock.systemUTC(), Duration.ofDays(31));
+        ChatAttachmentCleanup cleanup = new ChatAttachmentCleanup(attachmentRepository, storage, transaction, later,
+                Duration.ofDays(30), Duration.ofDays(3650));
+        ChatAttachmentCleanup.Result first = cleanup.cleanup();
+        assertThat(first.purgedAttachments()).isEqualTo(1);
+        assertThat(first.expiredFiles()).isZero();
+        assertThat(attachmentRepository.findById(sent.attachment().id()).orElseThrow().getPurgedAt()).isNotNull();
+        // 복사본은 그대로 내려받을 수 있음.
+        assertThat(storage.load(key)).isNotNull();
+        assertThat(service.attachmentFile(author.getId(), copy.attachment().id(), false).resource().exists()).isTrue();
+
+        // 복사본도 삭제되고 보관 기간이 지나면 원본·작은 사본 파일을 모두 지움. 행은 남고 "정리됨" 표시.
+        service.deleteMessage(author.getId(), targetRoom.getId(), copy.id(), 0L);
+        ChatAttachmentCleanup.Result second = cleanup.cleanup();
+        assertThat(second.purgedAttachments()).isEqualTo(1);
+        assertThat(second.expiredFiles()).isEqualTo(1);
+        assertThat(storage.load(key)).isNull();
+        assertThat(storage.load(thumbnailKey)).isNull();
+        assertThat(attachmentRepository.findById(copy.attachment().id()).orElseThrow().getPurgedAt()).isNotNull();
+        // 다시 돌려도 할 일이 없음.
+        assertThat(cleanup.cleanup().purgedAttachments()).isZero();
+    }
+
+    // DB 어디에도 기록이 없는 파일(고아 파일)만 지우고, 첨부가 가리키는 파일은 남김. 별도 임시 폴더로 격리해 검증.
+    @Test
+    void cleanupDeletesOnlyUnreferencedOrphanFiles(@TempDir Path folder)
+            throws IOException {
+        LocalFileStorage isolated =
+                new LocalFileStorage(folder.toString());
+        Long id = service.sendAttachment(author.getId(), room.getId(), png("keep.png"), null).attachment().id();
+        String referenced = attachmentRepository.findById(id).orElseThrow().getStorageKey();
+        // 같은 키 자리에 파일을 만들어 "DB가 가리키는 파일"을 흉내
+        Path keep = folder.resolve(referenced);
+        Files.createDirectories(keep.getParent());
+        Files.writeString(keep, "kept");
+        String orphan = isolated.save(new ByteArrayInputStream("orphan".getBytes(StandardCharsets.UTF_8)));
+
+        // 방금 만든 파일은 고아여도 기다림(올라가는 중일 수 있음)
+        ChatAttachmentCleanup now = new ChatAttachmentCleanup(attachmentRepository, isolated, transaction,
+                Clock.systemUTC(), Duration.ofDays(30), Duration.ofHours(24));
+        assertThat(now.cleanup().orphanFiles()).isZero();
+
+        ChatAttachmentCleanup dayLater = new ChatAttachmentCleanup(attachmentRepository, isolated, transaction,
+                Clock.offset(Clock.systemUTC(), Duration.ofHours(25)),
+                Duration.ofDays(30), Duration.ofHours(24));
+        assertThat(dayLater.cleanup().orphanFiles()).isEqualTo(1);
+        assertThat(isolated.load(orphan)).isNull();
+        assertThat(isolated.load(referenced)).isNotNull();
     }
 }

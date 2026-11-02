@@ -35,6 +35,8 @@ public class GlobalExceptionHandler {
                         case "CHAT_ATTACHMENT_NOT_FOUND" -> HttpStatus.NOT_FOUND;
                         case "CHAT_ATTACHMENT_TOO_LARGE" -> HttpStatus.CONTENT_TOO_LARGE;
                         case "CHAT_ATTACHMENT_SAVE_FAILED" -> HttpStatus.INTERNAL_SERVER_ERROR;
+                        case "CHAT_ATTACHMENT_RATE_LIMITED", "CHAT_ATTACHMENT_DAILY_LIMIT" -> HttpStatus.TOO_MANY_REQUESTS;
+                        case "CHAT_ATTACHMENT_STORAGE_FULL" -> HttpStatus.SERVICE_UNAVAILABLE;
                         default -> HttpStatus.BAD_REQUEST;
                 };
                 return ResponseEntity.status(status).body(ApiResponse.failure(exception.getCode(), exception.getMessage()));

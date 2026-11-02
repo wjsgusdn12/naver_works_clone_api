@@ -15,6 +15,11 @@ app:
   storage:
     # 테스트에서 올린 파일은 빌드 폴더에 저장(지워져도 무방).
     root: target/test-uploads
+  attachment:
+    # 테스트 컴퓨터의 남은 디스크 공간과 상관없이 업로드 테스트가 돌도록 남은 공간 검사는 끔(검사 자체는 따로 테스트).
+    min-free-bytes: 0
+    # 사진을 여러 장 올리는 테스트가 막히지 않도록 크게(제한 자체는 ChatAttachmentTests에서 따로 검증).
+    uploads-per-minute: 1000
   cors:
     allowed-origin: http://localhost:3000
   auth:

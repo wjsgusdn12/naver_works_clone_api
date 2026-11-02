@@ -4,10 +4,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -37,6 +40,36 @@ public class LocalFileStorage implements FileStorage {
     public Resource load(String key) {
         Path path = resolve(key);
         return Files.isRegularFile(path) ? new FileSystemResource(path) : null;
+    }
+
+    @Override
+    public void delete(String key) throws IOException {
+        Files.deleteIfExists(resolve(key));
+    }
+
+    @Override
+    public long usableSpace() throws IOException {
+        Files.createDirectories(root);
+        return Files.getFileStore(root).getUsableSpace();
+    }
+
+    @Override
+    public void forEachKeyBefore(Instant before, Consumer<String> action) throws IOException {
+        if (!Files.isDirectory(root)) return;
+        try (Stream<Path> paths = Files.walk(root)) {
+            paths.filter(Files::isRegularFile).filter(path -> modifiedBefore(path, before))
+                    // 위치 키는 "2026/10/uuid"처럼 / 로 구분(윈도우에서도 같게)
+                    .map(path -> root.relativize(path).toString().replace('\\', '/'))
+                    .forEach(action);
+        }
+    }
+
+    private static boolean modifiedBefore(Path path, Instant before) {
+        try {
+            return Files.getLastModifiedTime(path).toInstant().isBefore(before);
+        } catch (IOException exception) {
+            return false;
+        }
     }
 
     // 키가 저장 폴더 밖을 가리키면(../ 등) 거부.

@@ -40,6 +40,16 @@ app:
   storage:
     # 첨부 파일을 저장할 서버 디스크 폴더. 배포 때는 Docker 볼륨 경로로 덮어씀.
     root: ${FILE_STORAGE_ROOT:./uploads}
+  attachment:
+    # 한 사람이 1분에 올릴 수 있는 파일 수, 24시간 동안 올릴 수 있는 총용량(1GB)
+    uploads-per-minute: ${ATTACHMENT_UPLOADS_PER_MINUTE:30}
+    daily-upload-bytes: ${ATTACHMENT_DAILY_UPLOAD_BYTES:1073741824}
+    # 저장소에 늘 남겨 둘 공간(2GB). 이보다 적게 남으면 업로드를 거절해 서버 전체가 멈추는 것을 막음.
+    min-free-bytes: ${ATTACHMENT_MIN_FREE_BYTES:2147483648}
+    # 메시지 삭제·방 종료 뒤 파일을 보관하는 기간, 고아 파일로 보기 전 기다리는 시간, 청소 시각(한국 시간 새벽 4시 30분)
+    retention-days: ${ATTACHMENT_RETENTION_DAYS:30}
+    orphan-grace-hours: 24
+    cleanup-cron: "0 30 4 * * *"
   cors:
     # Next.js 개발 서버만 API와 쿠키를 교차 출처로 호출하도록 허용.
     allowed-origin: ${CORS_ALLOWED_ORIGIN:http://localhost:3000}

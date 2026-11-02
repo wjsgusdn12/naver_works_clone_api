@@ -44,14 +44,21 @@ public class ChatMessageAttachment {
     private Integer width;
     private Integer height;
 
+    // 사진 작은 사본(말풍선·모아보기용) 위치 키. 없으면 원본을 그대로 보여 줌.
+    @Column(length = 100)
+    private String thumbnailKey;
+
     @Column(nullable = false)
     private Instant createdAt;
+
+    // 보관 기간이 끝나 디스크 파일을 정리한 시각(행은 남김)
+    private Instant purgedAt;
 
     protected ChatMessageAttachment() {
     }
 
     public ChatMessageAttachment(ChatMessage chatMessage, ChatAttachmentKind kind, String originalName,
-            String contentType, long size, String storageKey, Integer width, Integer height) {
+            String contentType, long size, String storageKey, Integer width, Integer height, String thumbnailKey) {
         this.chatMessage = chatMessage;
         this.chatRoom = chatMessage.getChatRoom();
         this.kind = kind;
@@ -61,11 +68,18 @@ public class ChatMessageAttachment {
         this.storageKey = storageKey;
         this.width = width;
         this.height = height;
+        this.thumbnailKey = thumbnailKey;
         this.createdAt = Instant.now();
     }
 
-    // 전달한 메시지용 복사본. 파일은 다시 저장하지 않고 같은 위치 키를 가리킴.
+    // 전달한 메시지용 복사본. 파일은 다시 저장하지 않고 같은 위치 키(원본·썸네일)를 가리킴.
     public ChatMessageAttachment copyFor(ChatMessage target) {
-        return new ChatMessageAttachment(target, kind, originalName, contentType, size, storageKey, width, height);
+        return new ChatMessageAttachment(target, kind, originalName, contentType, size, storageKey, width, height,
+                thumbnailKey);
+    }
+
+    // 파일 보관이 끝났다고 표시(이미 표시돼 있으면 그대로).
+    public void markPurged(Instant at) {
+        if (purgedAt == null) purgedAt = at;
     }
 }

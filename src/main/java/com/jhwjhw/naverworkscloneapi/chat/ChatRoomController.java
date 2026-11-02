@@ -199,10 +199,12 @@ public class ChatRoomController {
   }
 
   // 첨부 내려받기. inline=true면 사진을 화면 표시용으로 보내고, 그 외에는 항상 저장(다운로드)용으로 보냄.
+  // thumbnail=true(화면 표시용일 때만)면 말풍선·모아보기용 작은 사본을 보냄(없으면 원본).
   @GetMapping("/message/attachment/download")
   public ResponseEntity<Resource> downloadAttachment(@AuthenticationPrincipal Jwt jwt,
-      @RequestParam Long attachmentId, @RequestParam(defaultValue = "false") boolean inline) {
-    ChatRoomService.AttachmentFile file = service.attachmentFile(id(jwt), attachmentId);
+      @RequestParam Long attachmentId, @RequestParam(defaultValue = "false") boolean inline,
+      @RequestParam(defaultValue = "false") boolean thumbnail) {
+    ChatRoomService.AttachmentFile file = service.attachmentFile(id(jwt), attachmentId, inline && thumbnail);
     ChatMessageAttachment attachment = file.attachment();
     boolean showInline = inline && attachment.getKind() == ChatAttachmentKind.IMAGE;
     // 일반 파일은 형식을 octet-stream으로 고정해 브라우저가 HTML 등으로 열어 실행하지 못하게 함.
@@ -212,7 +214,7 @@ public class ChatRoomController {
         .filename(attachment.getOriginalName(), StandardCharsets.UTF_8).build();
     return ResponseEntity.ok()
         .contentType(type)
-        .contentLength(attachment.getSize())
+        .contentLength(file.size())
         .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
         // 같은 파일은 내용이 바뀌지 않으므로 본인 브라우저에만 캐시.
         .cacheControl(CacheControl.maxAge(Duration.ofDays(1)).cachePrivate())

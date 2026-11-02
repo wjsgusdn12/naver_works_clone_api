@@ -79,7 +79,7 @@ class ChatSearchTests {
     private ChatMessageAttachment file(ChatRoom room, Membership sender, String name) {
         ChatMessage message = text(room, sender, name);
         return attachments.save(new ChatMessageAttachment(message, ChatAttachmentKind.FILE, name,
-                "application/octet-stream", 1234, "fake-key-" + name, null, null));
+                "application/octet-stream", 1234, "fake-key-" + name, null, null, null));
     }
 
     @Test

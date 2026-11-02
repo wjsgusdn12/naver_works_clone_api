@@ -28,6 +28,7 @@ import com.jhwjhw.naverworkscloneapi.notification.NotificationService;
 import com.jhwjhw.naverworkscloneapi.notification.domain.NotificationCategory;
 import com.jhwjhw.naverworkscloneapi.addressbook.AddressBookResponse;
 import com.jhwjhw.naverworkscloneapi.presence.PresenceService;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
@@ -67,6 +68,7 @@ public class ChatRoomService {
     private final ChatRoomNoticeRepository noticeRepository;
     private final ChatMessageAttachmentRepository attachmentRepository;
     private final ChatAttachmentStore attachmentStore;
+    private final ChatUploadLimiter uploadLimiter;
     private final MembershipRepository membershipRepository;
     private final MemberFavoriteRepository favoriteRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -505,14 +507,16 @@ public class ChatRoomService {
         ChatRoomMember sender = active(roomId, requesterId);
         ChatRoom room = sender.getChatRoom();
         requireOpen(room);
-        // 권한·답장 검사를 먼저 끝내고 나서 디스크에 저장.
+        // 권한·답장·업로드 한도 검사를 먼저 끝내고 나서 디스크에 저장.
         ChatMessage original = replyOriginal(roomId, replyToMessageId);
+        uploadLimiter.check(requesterId, file == null ? 0 : file.getSize());
         ChatAttachmentStore.StoredFile stored = attachmentStore.store(file);
         String content = stored.kind() == ChatAttachmentKind.IMAGE ? "사진" : stored.name();
         ChatMessage message = new ChatMessage(room, sender.getMembership(), content, ChatMessageType.TEXT);
         if (original != null) message.replyTo(original);
         ChatMessageAttachment attachment = new ChatMessageAttachment(message, stored.kind(), stored.name(),
-                stored.contentType(), stored.size(), stored.key(), stored.width(), stored.height());
+                stored.contentType(), stored.size(), stored.key(), stored.width(), stored.height(),
+                stored.thumbnailKey());
         ChatRoomResponse.Message response = deliver(sender, message, attachment);
         log.info("Chat attachment sent. roomId={}, messageId={}, senderId={}, kind={}, size={}",
                 roomId, message.getId(), requesterId, stored.kind(), stored.size());
@@ -662,22 +666,32 @@ public class ChatRoomService {
         active(roomId, requesterId).unhide();
     }
 
-    // 내려받기용 첨부와 실제 파일.
-    public record AttachmentFile(ChatMessageAttachment attachment, Resource resource) {
+    // 내려받기용 첨부와 실제 파일, 보낼 크기(썸네일이면 썸네일 크기).
+    public record AttachmentFile(ChatMessageAttachment attachment, Resource resource, long size) {
     }
 
     // 그 방의 활성 참여자만, 삭제되지 않은 메시지의 첨부만 내려받을 수 있음.
+    // thumbnail=true면 작은 사본을 주고, 작은 사본이 없는 사진(작은 사진·GIF·예전 사진)은 원본을 줌.
     @Transactional(readOnly = true)
-    public AttachmentFile attachmentFile(Long requesterId, Long attachmentId) {
+    public AttachmentFile attachmentFile(Long requesterId, Long attachmentId, boolean thumbnail) {
         ChatMessageAttachment attachment = attachmentRepository.findById(attachmentId)
                 .orElseThrow(() -> new ChatException("CHAT_ATTACHMENT_NOT_FOUND", "파일을 찾을 수 없습니다."));
         active(attachment.getChatRoom().getId(), requesterId);
-        Resource resource = attachment.getChatMessage().getDeletedAt() == null
-                ? attachmentStore.load(attachment.getStorageKey()) : null;
+        Resource resource = null;
+        if (attachment.getChatMessage().getDeletedAt() == null && attachment.getPurgedAt() == null) {
+            if (thumbnail && attachment.getThumbnailKey() != null) {
+                resource = attachmentStore.load(attachment.getThumbnailKey());
+            }
+            if (resource == null) resource = attachmentStore.load(attachment.getStorageKey());
+        }
         if (resource == null) {
             throw new ChatException("CHAT_ATTACHMENT_NOT_FOUND", "파일을 찾을 수 없습니다.");
         }
-        return new AttachmentFile(attachment, resource);
+        try {
+            return new AttachmentFile(attachment, resource, resource.contentLength());
+        } catch (IOException exception) {
+            throw new ChatException("CHAT_ATTACHMENT_NOT_FOUND", "파일을 찾을 수 없습니다.");
+        }
     }
 
     // 보낸 사람을 뺀 활성 참여자에게 방별 알림 설정(끔·멘션만·전체)을 지켜 서비스 알림을 남김.
