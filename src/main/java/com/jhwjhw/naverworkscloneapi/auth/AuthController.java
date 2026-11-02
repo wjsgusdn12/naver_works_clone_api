@@ -85,6 +85,16 @@ public class AuthController {
                                 .body(ApiResponse.success("AUTH_COMPANY_MOVED", "회사를 옮겼습니다.", result.response()));
         }
 
+        // 관리자 모드 켜기·끄기(상단바 관리자 메뉴). 새 권한은 이어서 토큰을 갱신하면 적용됨.
+        @PostMapping("/adminMode")
+        public ApiResponse<AuthMemberResponse> changeAdminMode(@AuthenticationPrincipal Jwt jwt,
+                        @Valid @RequestBody AdminModeRequest request) {
+                Long membershipId = jwt.getClaim("membershipId");
+                return ApiResponse.success("AUTH_ADMIN_MODE_CHANGED",
+                                request.enabled() ? "관리자 모드를 켰습니다." : "관리자 모드를 껐습니다.",
+                                authService.changeAdminMode(membershipId, request.enabled()));
+        }
+
         // 복구 코드 재발급(로그인 후 내 프로필)
         @PostMapping("/recoveryCode/regenerate")
         public ApiResponse<SignupResponse.RecoveryCode> regenerateRecoveryCode(@AuthenticationPrincipal Jwt jwt) {

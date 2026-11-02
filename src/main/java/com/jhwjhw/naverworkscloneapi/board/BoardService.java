@@ -385,7 +385,7 @@ public class BoardService {
         List<BoardResponse.Comment> comments = commentRepository.findVisibleByPostId(postId).stream()
                 .map(comment -> new BoardResponse.Comment(comment.getId(), comment.getAuthor().getId(),
                         comment.getAuthor().getUserAccount().getDisplayName(),
-                        comment.getAuthor().getRole() == Role.ADMIN, comment.getContent(), comment.getCreatedAt(),
+                        comment.getAuthor().effectiveRole() == Role.ADMIN, comment.getContent(), comment.getCreatedAt(),
                         !post.isDeleted() && (viewer.admin()
                                 || comment.getAuthor().getId().equals(viewer.id()))))
                 .toList();
@@ -600,7 +600,7 @@ public class BoardService {
         for (Long postId : postRepository.findDueScheduledIds(now)) {
             if (postRepository.publishScheduled(postId, now) != 1) continue;
             BoardPost post = postRepository.findDetailById(postId).orElseThrow();
-            notifyNewPost(new Viewer(post.getAuthor(), post.getAuthor().getRole() == Role.ADMIN), post);
+            notifyNewPost(new Viewer(post.getAuthor(), post.getAuthor().effectiveRole() == Role.ADMIN), post);
             published++;
         }
         return published;
@@ -614,7 +614,7 @@ public class BoardService {
         String link = postLink(post);
         String writer = viewer.me().getUserAccount().getDisplayName();
         if (board.getType() == BoardType.INQUIRY) {
-            for (Membership admin : membershipRepository.findEnabledByRole(Role.ADMIN)) {
+            for (Membership admin : membershipRepository.findEnabledAdmins()) {
                 if (admin.getId().equals(viewer.id())) continue;
                 notificationService.create(admin.getId(), NotificationCategory.SYSTEM, "새 문의",
                         writer + "님이 문의를 남겼습니다: " + post.getTitle(), link);
@@ -757,7 +757,7 @@ public class BoardService {
         if (!me.getUserAccount().isEnabled()) {
             throw new BoardException("BOARD_MEMBER_INACTIVE", "비활성 구성원은 게시판을 사용할 수 없습니다.");
         }
-        return new Viewer(me, me.getRole() == Role.ADMIN);
+        return new Viewer(me, me.effectiveRole() == Role.ADMIN);
     }
 
     private List<Board> visibleBoards(Viewer viewer) {

@@ -71,6 +71,10 @@ public class Membership {
     @Column(nullable = false, length = 30)
     private Role role;
 
+    // 관리자 모드. 실제 관리자 권한은 이 값으로 정함(체험용이라 모두 켜진 채 시작, 본인이 끌 수 있음).
+    @Column(name = "admin_mode", nullable = false)
+    private boolean adminMode = true;
+
     // 구성원 생성 시간
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -135,6 +139,16 @@ public class Membership {
     // 지금 유효한 상태의 자동 해제 시각. 상태가 없거나 지났으면 null.
     public Instant currentStatusUntil() {
         return currentStatusType() == null ? null : statusUntil;
+    }
+
+    // 관리자 모드 켜기·끄기.
+    public void changeAdminMode(boolean adminMode) {
+        this.adminMode = adminMode;
+    }
+
+    // 지금 적용되는 권한. 토큰·게시판 관리자 판정은 모두 이 값을 사용.
+    public Role effectiveRole() {
+        return adminMode ? Role.ADMIN : Role.USER;
     }
 
 }

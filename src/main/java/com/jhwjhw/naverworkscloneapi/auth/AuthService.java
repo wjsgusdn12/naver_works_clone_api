@@ -101,6 +101,16 @@ public class AuthService {
         return toMemberResponse(membership);
     }
 
+    // 관리자 모드 켜기·끄기. 토큰의 role은 다음 토큰 갱신 때 바뀌므로 화면이 바로 갱신을 요청함.
+    @Transactional
+    public AuthMemberResponse changeAdminMode(Long membershipId, boolean enabled) {
+        Membership membership = membershipRepository.findById(membershipId)
+                .orElseThrow(InvalidAuthenticationException::new);
+        membership.changeAdminMode(enabled);
+        log.info("Admin mode changed. membershipId={}, enabled={}", membershipId, enabled);
+        return toMemberResponse(membership);
+    }
+
     // 로그아웃
     @Transactional
     public void logout(String rawRefreshToken) {
@@ -342,7 +352,7 @@ public class AuthService {
     public SignupResponse.InviteCode companyInviteCode(Long membershipId, boolean regenerate) {
         Membership membership = membershipRepository.findById(membershipId)
                 .orElseThrow(InvalidAuthenticationException::new);
-        if (membership.getRole() != Role.ADMIN) {
+        if (membership.effectiveRole() != Role.ADMIN) {
             throw new AuthException("AUTH_INVITE_CODE_FORBIDDEN", "초대 코드는 관리자만 볼 수 있습니다.");
         }
         Company company = membership.getCompany();
@@ -471,7 +481,7 @@ public class AuthService {
                 // 이후 API 인가 시 현재 사용자와 회사·역할을 식별하는 최소 클레임.
                 .claim("membershipId", membership.getId())
                 .claim("companyId", membership.getCompany().getId())
-                .claim("role", membership.getRole().name())
+                .claim("role", membership.effectiveRole().name())
                 .build())).getTokenValue();
 
         // DB에는 원문이 아닌 해시만 저장하고, 원문은 지금 응답 쿠키에만 사용.
@@ -551,7 +561,7 @@ public class AuthService {
                 // 화면에는 가린 이메일만 내보냄.
                 PersonalInfoMasker.maskEmail(userAccount.getEmail()),
                 userAccount.getDisplayName(),
-                membership.getRole().name());
+                membership.effectiveRole().name());
     }
 
     // Controller에 응답 본문과 HttpOnly 쿠키 값을 함께 전달하는 서비스 내부 결과 객체.

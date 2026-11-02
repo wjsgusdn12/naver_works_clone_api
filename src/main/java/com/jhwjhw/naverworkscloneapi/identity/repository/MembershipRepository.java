@@ -1,7 +1,6 @@
 package com.jhwjhw.naverworkscloneapi.identity.repository;
 
 import com.jhwjhw.naverworkscloneapi.identity.domain.Membership;
-import com.jhwjhw.naverworkscloneapi.identity.domain.Role;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
@@ -47,10 +46,10 @@ public interface MembershipRepository extends JpaRepository<Membership, Long>, J
             + "left join fetch membership.department where account.enabled = true order by account.displayName")
     List<Membership> findAllEnabled();
 
-    // 사용 중인 관리자 전체(문의하기 새 글 알림 대상). 관리자는 모든 회사 문의를 봄.
+    // 관리자 모드를 켠 사용 중인 구성원 전체(문의하기 새 글 알림 대상). 관리자는 모든 회사 문의를 봄.
     @Query("select membership from Membership membership join fetch membership.userAccount account "
-            + "where membership.role = :role and account.enabled = true")
-    List<Membership> findEnabledByRole(@Param("role") Role role);
+            + "where membership.adminMode = true and account.enabled = true")
+    List<Membership> findEnabledAdmins();
 
     // 회사별 사용 중인 구성원 수를 쿼리 한 번으로 집계(조직도 표시용).
     @Query("select membership.company.id as companyId, count(membership) as memberCount from Membership membership "
