@@ -484,6 +484,36 @@ class BoardTests {
         assertThat(new BoardService.ListOptions(15, null, false).size()).isEqualTo(BoardService.PAGE_SIZE);
     }
 
+    // 검색 결과 탭: 게시글(제목·본문)·작성자·파일 이름·댓글을 따로 찾고, 탭별 건수와 맞은 파일·댓글 글자를 줌.
+    @Test
+    void searchScopesSeparatePostsAuthorsFilesAndComments() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var byTitle = write(colleague, free, "예산 회의");
+        var file = service.upload(me.getId(),
+                new MockMultipartFile("file", "예산표.xlsx", "application/octet-stream", "가상".getBytes()));
+        var withFile = service.create(me.getId(),
+                new BoardRequest.PostCreate(free, "첨부 글", doc("내용"), false, false, List.of(file.id())));
+        var withComment = write(me, free, "댓글 받을 글");
+        service.addComment(colleague.getId(), withComment.id(), new BoardRequest.CommentCreate("예산 확인했습니다"));
+
+        var ten = BoardService.ListOptions.DEFAULT;
+        java.util.function.Function<BoardService.SearchScope, BoardResponse.PostPage> search = scope -> service.list(
+                developer.getId(), BoardService.View.LATEST, null, null, 0, "예산", ten, scope);
+        assertThat(ids(search.apply(BoardService.SearchScope.POST))).containsExactly(byTitle.id());
+        assertThat(search.apply(BoardService.SearchScope.FILE).items()).singleElement().satisfies(row -> {
+            assertThat(row.id()).isEqualTo(withFile.id());
+            assertThat(row.matchText()).isEqualTo("예산표.xlsx");
+        });
+        assertThat(search.apply(BoardService.SearchScope.COMMENT).items()).singleElement()
+                .extracting(BoardResponse.PostSummary::matchText).isEqualTo("예산 확인했습니다");
+        assertThat(ids(service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, "같은 팀", ten,
+                BoardService.SearchScope.AUTHOR))).containsExactly(byTitle.id());
+
+        assertThat(service.searchCounts(developer.getId(), " 예산 "))
+                .isEqualTo(new BoardResponse.SearchCounts(1, 0, 1, 1));
+        assertThat(service.searchCounts(developer.getId(), "같은 팀").author()).isEqualTo(1);
+    }
+
     @Test
     void searchMatchesTitleBodyOrAuthorAndPagesAreNumbered() {
         Long free = board(me, BoardType.FREE, company.getName()).id();
