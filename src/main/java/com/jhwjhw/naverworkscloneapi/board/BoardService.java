@@ -60,6 +60,9 @@ public class BoardService {
     static final int PINNED_MAX = 20;
     static final int KEYWORD_MAX = 100;
     static final Duration SCHEDULE_MAX = Duration.ofDays(90);
+    static final Duration ENSURE_INTERVAL = Duration.ofMinutes(10);
+    // 구성원별 마지막 게시판 확인 시각(서버 메모리, 재시작하면 비워짐)
+    private final Map<Long, Instant> ensuredAt = new java.util.concurrent.ConcurrentHashMap<>();
     static final List<BoardType> COMMON_TYPES = List.of(BoardType.NOTICE, BoardType.FREE, BoardType.INQUIRY);
     static final Duration TRASH_KEEP = Duration.ofDays(30);
     static final int MAX_ATTACHMENTS = 30;
@@ -98,6 +101,11 @@ public class BoardService {
     // 다른 요청이 동시에 만들면 유일 제약 때문에 이쪽이 실패하는데, 컨트롤러가 그 실패를 무시하고 계속 진행.
     @Transactional
     public void ensureBoards(Long membershipId) {
+        // 사이드바·홈을 열 때마다 부르므로, 같은 사람은 10분에 한 번만 확인(부서 추가는 늦어도 10분 안에 반영)
+        Instant now = Instant.now();
+        Instant checked = ensuredAt.get(membershipId);
+        if (checked != null && checked.isAfter(now.minus(ENSURE_INTERVAL))) return;
+        ensuredAt.put(membershipId, now);
         Viewer viewer = viewer(membershipId);
         List<Company> companies = viewer.admin() ? companyRepository.findAll() : List.of(viewer.me().getCompany());
         Set<Long> companyIds = companies.stream().map(Company::getId).collect(Collectors.toSet());
@@ -199,15 +207,19 @@ public class BoardService {
         Board inquiry = primary(boards, BoardType.INQUIRY);
         // 관리자는 모든 문의를, 일반 사용자는 내 문의만(쿼리가 남의 문의를 뺌)
         List<Long> inquiryBoards = ofType(boards, BoardType.INQUIRY);
-        return new BoardResponse.Home(
-                summaries(viewer, find(viewer, ids(boards), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0, HOME_SIZE).getContent()),
-                summaries(viewer, find(viewer, inquiryBoards, false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0, HOME_SIZE).getContent()),
-                notice == null ? List.of()
-                        : summaries(viewer, find(viewer, ofType(boards, BoardType.NOTICE), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
-                                HOME_SIZE).getContent()),
-                free == null ? List.of()
-                        : summaries(viewer, find(viewer, ofType(boards, BoardType.FREE), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
-                                HOME_SIZE).getContent()),
+        List<BoardPost> latest = homeRows(viewer, ids(boards));
+        List<BoardPost> inquiries = homeRows(viewer, inquiryBoards);
+        List<BoardPost> notices = notice == null ? List.of() : homeRows(viewer, ofType(boards, BoardType.NOTICE));
+        List<BoardPost> frees = free == null ? List.of() : homeRows(viewer, ofType(boards, BoardType.FREE));
+        // 네 목록의 읽음·첨부 여부를 쿼리 한 번씩으로 함께 확인
+        Map<Long, BoardResponse.PostSummary> byId = summaries(viewer, java.util.stream.Stream
+                .of(latest, inquiries, notices, frees).flatMap(List::stream)
+                .collect(Collectors.toMap(BoardPost::getId, Function.identity(), (a, b) -> a,
+                        java.util.LinkedHashMap::new)).values().stream().toList())
+                .stream().collect(Collectors.toMap(BoardResponse.PostSummary::id, Function.identity()));
+        Function<List<BoardPost>, List<BoardResponse.PostSummary>> pick = rows -> rows.stream()
+                .map(post -> byId.get(post.getId())).toList();
+        return new BoardResponse.Home(pick.apply(latest), pick.apply(inquiries), pick.apply(notices), pick.apply(frees),
                 notice == null ? null : notice.getId(), free == null ? null : free.getId(),
                 inquiry == null ? null : inquiry.getId());
     }
@@ -309,6 +321,14 @@ public class BoardService {
                 options.sort() == Sort.ACTIVITY, PageRequest.of(page, size));
     }
 
+    // 게시판 홈 한 영역: 최신 HOME_SIZE개(전체 개수는 필요 없어 세지 않음)
+    private List<BoardPost> homeRows(Viewer viewer, List<Long> boardIds) {
+        if (boardIds.isEmpty()) return List.of();
+        return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, false, false, false,
+                false, false, false, "", false, org.springframework.data.domain.Pageable.ofSize(HOME_SIZE)
+                        .withPage(0)).getContent();
+    }
+
     private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows) {
         return new BoardResponse.PostPage(pinned, summaries(viewer, rows.getContent()), rows.getNumber(),
                 rows.getTotalPages(), rows.getTotalElements());
@@ -337,10 +357,30 @@ public class BoardService {
 
     // ---------- 글 ----------
 
+    // 글 열기: 처음 여는 것이면 읽음 기록·조회수 1을 남기고 상세를 돌려줌(한 트랜잭션, 같은 조회 반복 없음).
+    // 같은 사람이 동시에 열어 유일 제약에 걸리면 컨트롤러가 detail()로 다시 읽음.
+    @Transactional
+    public BoardResponse.PostDetail open(Long membershipId, Long postId) {
+        Viewer viewer = viewer(membershipId);
+        BoardPost post = readablePost(viewer, postId);
+        if (!post.isDeleted() && post.isPublished()
+                && !readRepository.existsByPostIdAndMembershipId(postId, viewer.id())) {
+            readRepository.saveAndFlush(new BoardPostRead(post, viewer.me()));
+            postRepository.increaseViewCount(postId);
+            // 조회수 변경을 반영해 다시 읽음(벌크 변경이 영속성 컨텍스트를 비움)
+            post = readablePost(viewer, postId);
+        }
+        return detail(viewer, post);
+    }
+
     @Transactional(readOnly = true)
     public BoardResponse.PostDetail detail(Long membershipId, Long postId) {
         Viewer viewer = viewer(membershipId);
-        BoardPost post = readablePost(viewer, postId);
+        return detail(viewer, readablePost(viewer, postId));
+    }
+
+    private BoardResponse.PostDetail detail(Viewer viewer, BoardPost post) {
+        Long postId = post.getId();
         boolean author = isAuthor(viewer, post);
         List<BoardResponse.Comment> comments = commentRepository.findVisibleByPostId(postId).stream()
                 .map(comment -> new BoardResponse.Comment(comment.getId(), comment.getAuthor().getId(),
@@ -712,7 +752,7 @@ public class BoardService {
     // ---------- 권한 ----------
 
     private Viewer viewer(Long membershipId) {
-        Membership me = membershipRepository.findById(membershipId)
+        Membership me = membershipRepository.findWithUserAccountById(membershipId)
                 .orElseThrow(() -> new BoardException("BOARD_MEMBER_NOT_FOUND", "구성원을 찾을 수 없습니다."));
         if (!me.getUserAccount().isEnabled()) {
             throw new BoardException("BOARD_MEMBER_INACTIVE", "비활성 구성원은 게시판을 사용할 수 없습니다.");
@@ -723,11 +763,8 @@ public class BoardService {
     private List<Board> visibleBoards(Viewer viewer) {
         if (viewer.admin()) return boardRepository.findAllActive().stream().filter(board -> canView(viewer, board)).toList();
         // 일반: 내 회사 게시판(부서는 내 부서만) + 공통 게시판 전체(다른 회사에서 예전에 만든 것 포함)
-        Map<Long, Board> boards = new java.util.LinkedHashMap<>();
-        boardRepository.findActiveByCompanyId(viewer.me().getCompany().getId()).stream()
-                .filter(board -> canView(viewer, board)).forEach(board -> boards.put(board.getId(), board));
-        boardRepository.findByTypes(COMMON_TYPES).forEach(board -> boards.putIfAbsent(board.getId(), board));
-        return List.copyOf(boards.values());
+        return boardRepository.findActiveForCompanyOrTypes(viewer.me().getCompany().getId(), COMMON_TYPES).stream()
+                .filter(board -> canView(viewer, board)).toList();
     }
 
     // 공통 게시판은 누구에게나 "내 게시판"(회사 이름을 붙이지 않음)

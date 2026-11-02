@@ -71,12 +71,14 @@ public class BoardController {
     // 글 보기. 처음 여는 것이면 읽음 기록·조회수 1.
     @GetMapping("/post/{postId}")
     public ApiResponse<BoardResponse.PostDetail> detail(@AuthenticationPrincipal Jwt jwt, @PathVariable Long postId) {
+        BoardResponse.PostDetail detail;
         try {
-            service.markRead(id(jwt), postId);
+            detail = service.open(id(jwt), postId);
         } catch (DataIntegrityViolationException ignored) {
-            // 같은 사람이 동시에 열어 이미 기록됨
+            // 같은 사람이 동시에 열어 이미 기록됨 → 읽음 기록 없이 다시 읽음
+            detail = service.detail(id(jwt), postId);
         }
-        return ApiResponse.success("BOARD_POST_FOUND", "글을 조회했습니다.", service.detail(id(jwt), postId));
+        return ApiResponse.success("BOARD_POST_FOUND", "글을 조회했습니다.", detail);
     }
 
     // 목록에서 고른 글을 한꺼번에 읽음으로. 결과는 새로 읽음 처리한 글 수.

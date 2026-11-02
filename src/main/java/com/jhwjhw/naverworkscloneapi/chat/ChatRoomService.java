@@ -935,7 +935,8 @@ public class ChatRoomService {
     }
 
     private Membership activeMembership(Long membershipId) {
-        Membership membership = membershipRepository.findById(membershipId)
+        // 계정(사용 여부 확인)까지 한 쿼리로
+        Membership membership = membershipRepository.findWithUserAccountById(membershipId)
                 .orElseThrow(() -> new ChatException("CHAT_MEMBER_NOT_FOUND", "구성원을 찾을 수 없습니다."));
         if (!membership.getUserAccount().isEnabled()) {
             throw new ChatException("CHAT_MEMBER_INACTIVE", "비활성 구성원은 채팅을 사용할 수 없습니다.");
