@@ -159,7 +159,7 @@ class BoardTests {
 
         // 다른 회사 사람도 같은 공지·자유게시판을 봄, 회사 이름은 붙이지 않음
         var outsiderNotice = service.list(outsider.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null);
-        assertThat(outsiderNotice.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(notice.id());
+        assertThat(ids(outsiderNotice)).containsExactly(notice.id());
         var myFree = service.list(me.getId(), BoardService.View.BOARD, free, null);
         assertThat(ids(myFree)).containsExactly(outsiderPost.id());
         assertThat(myFree.items().getFirst().companyName()).isEmpty();
@@ -337,16 +337,24 @@ class BoardTests {
                 .extracting(BoardResponse.Reader::companyName).containsExactly("가상 다른 회사");
         assertThatThrownBy(() -> service.readers(colleague.getId(), post.id())).isInstanceOf(BoardException.class);
 
-        // 목록: 필독·중요 모아보기, 게시판에서는 중요 글이 맨 위 고정(아래 목록에는 중복 안 됨)
+        // 목록: 필독 모아보기. 중요는 각자 표시한 글만(글쓴이가 중요로 써도 남에게는 영향 없음, 맨 위 고정 없음)
         var normal = write(colleague, free, "일반 글");
         assertThat(ids(service.list(developer.getId(), BoardService.View.MUST_READ, null, null)))
                 .containsExactly(post.id());
+        assertThat(service.list(developer.getId(), BoardService.View.IMPORTANT, null, null).items()).isEmpty();
+        assertThat(service.toggleImportant(developer.getId(), normal.id())).isTrue();
         assertThat(ids(service.list(developer.getId(), BoardService.View.IMPORTANT, null, null)))
-                .containsExactly(post.id());
+                .containsExactly(normal.id());
+        // 다른 사람의 중요 목록에는 나오지 않음
+        assertThat(service.list(colleague.getId(), BoardService.View.IMPORTANT, null, null).items()).isEmpty();
         var boardPage = service.list(developer.getId(), BoardService.View.BOARD, free, null);
-        assertThat(boardPage.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(post.id());
-        assertThat(ids(boardPage)).containsExactly(normal.id());
-        assertThat(boardPage.pinned().getFirst().read()).isTrue();
+        assertThat(boardPage.pinned()).isEmpty();
+        assertThat(ids(boardPage)).containsExactly(normal.id(), post.id());
+        assertThat(boardPage.items()).extracting(BoardResponse.PostSummary::important).containsExactly(true, false);
+        assertThat(service.detail(developer.getId(), normal.id()).important()).isTrue();
+        // 다시 누르면 해제
+        assertThat(service.toggleImportant(developer.getId(), normal.id())).isFalse();
+        assertThat(service.list(developer.getId(), BoardService.View.IMPORTANT, null, null).items()).isEmpty();
         assertThat(ids(service.list(colleague.getId(), BoardService.View.MINE, null, null)))
                 .containsExactly(normal.id());
     }
