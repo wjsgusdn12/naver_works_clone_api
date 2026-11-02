@@ -7,11 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
@@ -138,6 +134,11 @@ public class ChatAttachmentStore {
         try (InputStream in = file.getInputStream()) {
             head = in.readNBytes(12);
         }
+        return imageTypeOf(head);
+    }
+
+    // 파일 앞부분 바이트(12바이트면 충분)로 사진 형식을 판별. 사진이 아니면 null.
+    static String imageTypeOf(byte[] head) {
         if (startsWith(head, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)) return "image/png";
         if (startsWith(head, 0xFF, 0xD8, 0xFF)) return "image/jpeg";
         if (startsWith(head, 'G', 'I', 'F', '8')) return "image/gif";
@@ -158,20 +159,7 @@ public class ChatAttachmentStore {
 
     // 사진 전체를 메모리에 올리지 않고 머리 정보만 읽어 가로·세로를 얻음. 읽지 못하면 null.
     private static int[] imageSize(MultipartFile file) {
-        try (InputStream raw = file.getInputStream(); ImageInputStream in = ImageIO.createImageInputStream(raw)) {
-            if (in == null) return null;
-            Iterator<ImageReader> readers = ImageIO.getImageReaders(in);
-            if (!readers.hasNext()) return null;
-            ImageReader reader = readers.next();
-            try {
-                reader.setInput(in);
-                return new int[] { reader.getWidth(0), reader.getHeight(0) };
-            } finally {
-                reader.dispose();
-            }
-        } catch (IOException | RuntimeException exception) {
-            return null;
-        }
+        return ChatImageThumbnail.size(file);
     }
 
     // 경로 부분과 제어 문자를 빼고, 너무 긴 이름은 확장자를 살려 자름.

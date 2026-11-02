@@ -1,6 +1,7 @@
 package com.jhwjhw.naverworkscloneapi.chat;
 
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatMessageAttachment;
+import com.jhwjhw.naverworkscloneapi.chat.repository.ChatLinkPreviewRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.common.storage.FileStorage;
 import java.io.IOException;
@@ -22,7 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 // 첨부 파일 청소(매일 새벽 한 번). 디스크에만 남아 자리를 차지하는 파일을 정리함. DB 행은 지우지 않음.
 // 1) 보관 기간 끝: 메시지가 삭제됐거나 방이 끝난 지 retention-days가 지난 첨부는 디스크 파일을 지우고 "정리됨" 표시.
 //    단, 전달한 복사본처럼 같은 파일을 아직 쓰는 첨부가 있으면 파일은 남겨 둠.
-// 2) 고아 파일: DB 어디에도 기록이 없는 파일(저장 직후 서버가 꺼지는 등). 지금 막 올라가는 파일을 지우지 않도록
+// 2) 고아 파일: DB 어디에도 기록이 없는 파일(첨부 원본·썸네일·링크 대표 이미지 모두 아님)(저장 직후 서버가 꺼지는 등). 지금 막 올라가는 파일을 지우지 않도록
 //    orphan-grace-hours보다 오래된 것만 지움.
 // 서버가 여러 대면 각자 돌지만, 지우기·표시 모두 여러 번 해도 결과가 같아 안전함.
 @Component
@@ -31,6 +32,8 @@ public class ChatAttachmentCleanup {
     private static final int BATCH = 200;
 
     private final ChatMessageAttachmentRepository attachmentRepository;
+    // 링크 대표 이미지도 같은 저장소에 있어 고아 파일로 지우지 않도록 함께 확인
+    private final ChatLinkPreviewRepository linkPreviewRepository;
     private final FileStorage storage;
     private final TransactionTemplate transaction;
     private final Clock clock;
@@ -38,16 +41,19 @@ public class ChatAttachmentCleanup {
     private final Duration orphanGrace;
 
     @Autowired
-    public ChatAttachmentCleanup(ChatMessageAttachmentRepository attachmentRepository, FileStorage storage,
+    public ChatAttachmentCleanup(ChatMessageAttachmentRepository attachmentRepository,
+            ChatLinkPreviewRepository linkPreviewRepository, FileStorage storage,
             TransactionTemplate transaction, @Value("${app.attachment.retention-days:30}") long retentionDays,
             @Value("${app.attachment.orphan-grace-hours:24}") long orphanGraceHours) {
-        this(attachmentRepository, storage, transaction, Clock.systemUTC(), Duration.ofDays(retentionDays),
+        this(attachmentRepository, linkPreviewRepository, storage, transaction, Clock.systemUTC(), Duration.ofDays(retentionDays),
                 Duration.ofHours(orphanGraceHours));
     }
 
-    ChatAttachmentCleanup(ChatMessageAttachmentRepository attachmentRepository, FileStorage storage,
+    ChatAttachmentCleanup(ChatMessageAttachmentRepository attachmentRepository,
+            ChatLinkPreviewRepository linkPreviewRepository, FileStorage storage,
             TransactionTemplate transaction, Clock clock, Duration retention, Duration orphanGrace) {
         this.attachmentRepository = attachmentRepository;
+        this.linkPreviewRepository = linkPreviewRepository;
         this.storage = storage;
         this.transaction = transaction;
         this.clock = clock;
@@ -129,6 +135,7 @@ public class ChatAttachmentCleanup {
             List<String> chunk = keys.subList(start, Math.min(start + BATCH, keys.size()));
             Set<String> referenced = new HashSet<>(attachmentRepository.findReferencedStorageKeys(chunk));
             referenced.addAll(attachmentRepository.findReferencedThumbnailKeys(chunk));
+            referenced.addAll(linkPreviewRepository.findReferencedImageKeys(chunk));
             for (String key : chunk) {
                 if (referenced.contains(key)) continue;
                 delete(key);

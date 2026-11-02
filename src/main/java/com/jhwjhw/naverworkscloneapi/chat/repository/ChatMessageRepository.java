@@ -12,6 +12,20 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+    // 링크 모아보기: 이 방의 삭제되지 않은 일반 글 중 http(s) 주소가 들어간 것을 최신순으로. cursor보다 오래된 것만.
+    // 사진·파일 메시지(본문이 파일 이름)는 뺌. 실제 주소는 서비스가 본문에서 뽑음.
+    @Query("""
+            select m from ChatMessage m
+            join fetch m.senderMembership s
+            join fetch s.userAccount
+            where m.chatRoom.id = :roomId and m.messageType = :type and m.deletedAt is null and m.id < :cursor
+              and (lower(m.content) like '%http://%' or lower(m.content) like '%https://%')
+              and not exists (select a.id from ChatMessageAttachment a where a.chatMessage = m)
+            order by m.id desc
+            """)
+    List<ChatMessage> findLinkMessages(@Param("roomId") Long roomId, @Param("type") ChatMessageType type,
+            @Param("cursor") Long cursor, Pageable pageable);
+
     @Override
     @EntityGraph(attributePaths = {"senderMembership", "senderMembership.userAccount", "replyToMessage"})
     Optional<ChatMessage> findById(Long id);

@@ -12,6 +12,7 @@ import static org.hamcrest.Matchers.startsWith;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoom;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomMember;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomType;
+import com.jhwjhw.naverworkscloneapi.chat.repository.ChatLinkPreviewRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatRoomMemberRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatRoomRepository;
@@ -72,6 +73,7 @@ class ChatAttachmentTests {
     @Autowired private JwtEncoder encoder;
     @Autowired private ChatMessageAttachmentRepository attachmentRepository;
     @Autowired private FileStorage storage;
+    @Autowired private ChatLinkPreviewRepository linkPreviewRepository;
     @Autowired private TransactionTemplate transaction;
 
     private Membership author;
@@ -388,7 +390,7 @@ class ChatAttachmentTests {
 
         // 31일 뒤의 청소. 고아 파일 정리는 이 테스트 대상이 아니라 아주 길게 잡아 건드리지 않음.
         Clock later = Clock.offset(Clock.systemUTC(), Duration.ofDays(31));
-        ChatAttachmentCleanup cleanup = new ChatAttachmentCleanup(attachmentRepository, storage, transaction, later,
+        ChatAttachmentCleanup cleanup = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, storage, transaction, later,
                 Duration.ofDays(30), Duration.ofDays(3650));
         ChatAttachmentCleanup.Result first = cleanup.cleanup();
         assertThat(first.purgedAttachments()).isEqualTo(1);
@@ -425,11 +427,11 @@ class ChatAttachmentTests {
         String orphan = isolated.save(new ByteArrayInputStream("orphan".getBytes(StandardCharsets.UTF_8)));
 
         // 방금 만든 파일은 고아여도 기다림(올라가는 중일 수 있음)
-        ChatAttachmentCleanup now = new ChatAttachmentCleanup(attachmentRepository, isolated, transaction,
+        ChatAttachmentCleanup now = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, isolated, transaction,
                 Clock.systemUTC(), Duration.ofDays(30), Duration.ofHours(24));
         assertThat(now.cleanup().orphanFiles()).isZero();
 
-        ChatAttachmentCleanup dayLater = new ChatAttachmentCleanup(attachmentRepository, isolated, transaction,
+        ChatAttachmentCleanup dayLater = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, isolated, transaction,
                 Clock.offset(Clock.systemUTC(), Duration.ofHours(25)),
                 Duration.ofDays(30), Duration.ofHours(24));
         assertThat(dayLater.cleanup().orphanFiles()).isEqualTo(1);

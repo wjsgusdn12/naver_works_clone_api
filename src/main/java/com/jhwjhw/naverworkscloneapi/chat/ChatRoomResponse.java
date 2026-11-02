@@ -70,6 +70,17 @@ public record ChatRoomResponse() {
     public record AttachmentPage(List<AttachmentItem> items, Long nextCursor) {
     }
 
+    // 링크 모아보기 한 줄. 메시지 하나에 링크가 여러 개면 링크마다 한 줄.
+    // previewStatus: PENDING(제목을 가져오는 중)·DONE·FAILED. title이 null이면 "제목 없는 웹사이트".
+    // imagePreviewId: 대표 이미지가 있으면 이미지 주소용 번호(없으면 null → 빈 이미지 자리).
+    public record LinkItem(Long messageId, String url, String title, Long imagePreviewId, String previewStatus,
+            Long senderMembershipId, String senderName, Instant createdAt) {
+    }
+
+    // 링크 모아보기 페이지. nextCursor는 메시지 번호 기준(그보다 오래된 메시지부터 이어서).
+    public record LinkPage(List<LinkItem> items, Long nextCursor) {
+    }
+
     // 상단 검색 결과가 속한 방. name은 화면에 보일 이름(그룹명·1:1 상대 이름·나와의 채팅은 내 이름),
     // hidden은 내가 목록에서 숨긴 방인지(누르면 숨김 해제 후 열기), memberCount는 참여 인원,
     // directMembershipId는 1:1 방 상대(아바타의 접속 상태 표시용, 그 외 방은 null).

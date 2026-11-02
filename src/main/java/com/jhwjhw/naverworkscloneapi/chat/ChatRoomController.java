@@ -198,6 +198,25 @@ public class ChatRoomController {
         service.attachments(id(jwt), chatRoomId, kind, cursor));
   }
 
+  // 방 상세의 링크 모아보기(최신순). 제목·대표 이미지를 아직 못 가져온 링크는 previewStatus가 PENDING.
+  @GetMapping("/message/link/list")
+  public ApiResponse<ChatRoomResponse.LinkPage> links(@AuthenticationPrincipal Jwt jwt,
+      @RequestParam Long chatRoomId, @RequestParam(required = false) Long cursor) {
+    return ApiResponse.success("CHAT_LINK_FOUND", "링크 목록을 조회했습니다.",
+        service.links(id(jwt), chatRoomId, cursor));
+  }
+
+  // 링크 대표 이미지(서버가 받아 작게 줄여 둔 사본). 브라우저가 외부 사이트에 직접 접속하지 않게 서버가 대신 줌.
+  @GetMapping("/message/link/image")
+  public ResponseEntity<Resource> linkImage(@AuthenticationPrincipal Jwt jwt, @RequestParam Long previewId) {
+    ChatRoomService.LinkImage image = service.linkImage(previewId);
+    return ResponseEntity.ok()
+        .contentType(MediaType.parseMediaType(image.contentType()))
+        .contentLength(image.size())
+        .cacheControl(CacheControl.maxAge(Duration.ofDays(1)).cachePrivate())
+        .body(image.resource());
+  }
+
   // 첨부 내려받기. inline=true면 사진을 화면 표시용으로 보내고, 그 외에는 항상 저장(다운로드)용으로 보냄.
   // thumbnail=true(화면 표시용일 때만)면 말풍선·모아보기용 작은 사본을 보냄(없으면 원본).
   @GetMapping("/message/attachment/download")

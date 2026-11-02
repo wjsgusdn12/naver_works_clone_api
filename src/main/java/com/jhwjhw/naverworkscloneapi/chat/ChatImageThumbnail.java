@@ -17,7 +17,7 @@ import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
-import org.springframework.web.multipart.MultipartFile;
+import org.springframework.core.io.InputStreamSource;
 
 // 사진의 작은 사본(썸네일)과 휴대폰 사진의 회전 정보(EXIF Orientation)를 다룸. 자바 기본 ImageIO만 사용.
 // - 말풍선·모아보기는 썸네일, 크게 보기·내려받기는 원본(업무용이라 원본 화질은 그대로 보관).
@@ -38,7 +38,7 @@ final class ChatImageThumbnail {
 
     // JPEG·PNG만 만듦. GIF는 움직임이 사라지고 WebP는 자바 기본으로 못 읽어 원본을 씀.
     // 이미 작고 회전도 없는 사진이면 만들 필요가 없어 null. 실패해도 업로드는 계속되도록 null.
-    static Result create(MultipartFile file, String imageType, int width, int height, int orientation) {
+    static Result create(InputStreamSource file, String imageType, int width, int height, int orientation) {
         boolean jpeg = "image/jpeg".equals(imageType);
         if (!jpeg && !"image/png".equals(imageType)) return null;
         if ((long) width * height > MAX_PIXELS) return null;
@@ -54,8 +54,26 @@ final class ChatImageThumbnail {
         }
     }
 
+    // 사진 전체를 메모리에 올리지 않고 머리 정보만 읽어 가로·세로를 얻음. 읽지 못하면 null.
+    static int[] size(InputStreamSource file) {
+        try (InputStream raw = file.getInputStream(); ImageInputStream in = ImageIO.createImageInputStream(raw)) {
+            if (in == null) return null;
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(in);
+            if (!readers.hasNext()) return null;
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(in);
+                return new int[] { reader.getWidth(0), reader.getHeight(0) };
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException | RuntimeException exception) {
+            return null;
+        }
+    }
+
     // 긴 변이 MAX_SIDE의 2배 안팎이 되도록 건너뛰며 읽음(그 뒤 부드럽게 줄여 화질 유지).
-    private static BufferedImage readSubsampled(MultipartFile file, int longest) throws IOException {
+    private static BufferedImage readSubsampled(InputStreamSource file, int longest) throws IOException {
         try (InputStream raw = file.getInputStream(); ImageInputStream in = ImageIO.createImageInputStream(raw)) {
             if (in == null) return null;
             Iterator<ImageReader> readers = ImageIO.getImageReaders(in);
@@ -138,7 +156,7 @@ final class ChatImageThumbnail {
 
     // JPEG 머리의 EXIF에서 회전값(1~8)을 읽음. 없거나 읽지 못하면 1(회전 없음).
     // 구조: FFD8 → [FFE1 길이 "Exif\0\0" + TIFF(II/MM, IFD0 위치) → 항목들 중 0x0112] ...
-    static int jpegOrientation(MultipartFile file) {
+    static int jpegOrientation(InputStreamSource file) {
         try (InputStream raw = file.getInputStream(); DataInputStream in = new DataInputStream(raw)) {
             if (in.readUnsignedShort() != 0xFFD8) return 1;
             while (true) {

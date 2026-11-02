@@ -1,6 +1,7 @@
 package com.jhwjhw.naverworkscloneapi.chat;
 
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatAttachmentKind;
+import com.jhwjhw.naverworkscloneapi.chat.domain.ChatLinkPreview;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatMessage;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatMessageAttachment;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatMessageReaction;
@@ -10,6 +11,7 @@ import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoom;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomMember;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomNotice;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomType;
+import com.jhwjhw.naverworkscloneapi.chat.repository.ChatLinkPreviewRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageReactionRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageMentionRow;
@@ -69,6 +71,8 @@ public class ChatRoomService {
     private final ChatMessageAttachmentRepository attachmentRepository;
     private final ChatAttachmentStore attachmentStore;
     private final ChatUploadLimiter uploadLimiter;
+    private final ChatLinkPreviewService linkPreviewService;
+    private final ChatLinkPreviewRepository linkPreviewRepository;
     private final MembershipRepository membershipRepository;
     private final MemberFavoriteRepository favoriteRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -483,6 +487,8 @@ public class ChatRoomService {
         if (original != null) message.replyTo(original);
         message.mention(validMentionedMemberIds(roomId, requesterId, request.mentionedMembershipIds()));
         ChatRoomResponse.Message response = deliver(sender, message);
+        // 글 속 링크의 미리보기(제목·대표 이미지)를 저장이 끝난 뒤 미리 가져오기 시작.
+        linkPreviewService.requestAfterCommit(message.getContent());
         log.debug("Chat message sent. roomId={}, messageId={}, senderId={}, replyToMessageId={}",
                 roomId, message.getId(), requesterId, message.getReplyToMessageId());
         return response;
@@ -544,6 +550,51 @@ public class ChatRoomService {
                         item.getChatMessage().getSenderMembership().getUserAccount().getDisplayName(),
                         item.getCreatedAt()))
                 .toList(), nextCursor);
+    }
+
+    // 방 상세의 링크 모아보기(최신순). 메시지 30개씩 읽어 그 안의 링크를 한 줄씩 펼침.
+    // 제목·대표 이미지는 미리보기 저장소에서 찾고, 아직 없으면 뒤에서 가져오기 시작(그동안 PENDING).
+    @Transactional(readOnly = true)
+    public ChatRoomResponse.LinkPage links(Long requesterId, Long roomId, Long cursor) {
+        active(roomId, requesterId);
+        List<ChatMessage> rows = messageRepository.findLinkMessages(roomId, ChatMessageType.TEXT,
+                cursor == null ? Long.MAX_VALUE : cursor, PageRequest.of(0, ATTACHMENT_PAGE_SIZE + 1));
+        List<ChatMessage> page = rows.stream().limit(ATTACHMENT_PAGE_SIZE).toList();
+        Long nextCursor = rows.size() > ATTACHMENT_PAGE_SIZE ? page.getLast().getId() : null;
+        Map<Long, List<String>> urlsByMessage = new LinkedHashMap<>();
+        page.forEach(message -> urlsByMessage.put(message.getId(),
+                ChatLinkPreviewService.extractUrls(message.getContent())));
+        Map<String, ChatLinkPreview> previews = linkPreviewService.previews(urlsByMessage.values().stream()
+                .flatMap(List::stream).collect(Collectors.toSet()));
+        List<ChatRoomResponse.LinkItem> items = page.stream().flatMap(message -> urlsByMessage.get(message.getId())
+                .stream().map(url -> {
+                    ChatLinkPreview preview = previews.get(url);
+                    return new ChatRoomResponse.LinkItem(message.getId(), url,
+                            preview == null ? null : preview.getTitle(),
+                            preview != null && preview.getImageKey() != null ? preview.getId() : null,
+                            preview == null ? ChatLinkPreview.Status.PENDING.name() : preview.getStatus().name(),
+                            message.getSenderMembership().getId(),
+                            message.getSenderMembership().getUserAccount().getDisplayName(),
+                            message.getCreatedAt());
+                }))
+                .toList();
+        return new ChatRoomResponse.LinkPage(items, nextCursor);
+    }
+
+    // 링크 대표 이미지(서버가 받아 줄여 둔 사본). 공개 웹사이트에서 받은 이미지라 로그인한 사용자면 볼 수 있음.
+    public record LinkImage(Resource resource, String contentType, long size) {
+    }
+
+    @Transactional(readOnly = true)
+    public LinkImage linkImage(Long previewId) {
+        ChatLinkPreview preview = linkPreviewRepository.findById(previewId).orElse(null);
+        Resource resource = preview == null ? null : linkPreviewService.image(preview);
+        if (resource == null) throw new ChatException("CHAT_ATTACHMENT_NOT_FOUND", "이미지를 찾을 수 없습니다.");
+        try {
+            return new LinkImage(resource, preview.getImageType(), resource.contentLength());
+        } catch (IOException exception) {
+            throw new ChatException("CHAT_ATTACHMENT_NOT_FOUND", "이미지를 찾을 수 없습니다.");
+        }
     }
 
     // 상단 검색 [메시지] 왼쪽 목록: 참여 중인 모든 방(숨긴 방 포함)을 방별 개수와 함께. 최근에 맞는 메시지가 있는 방이 위.
