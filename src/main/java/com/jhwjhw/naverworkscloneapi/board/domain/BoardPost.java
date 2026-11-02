@@ -76,6 +76,13 @@ public class BoardPost {
     // 등록예약 시각(예약 글만). 공개되면 비움.
     private Instant publishAt;
 
+    // 댓글 허용, 댓글이 달리면 글쓴이에게 알림. 문의하기는 답변이 댓글이라 항상 둘 다 켬.
+    @Column(nullable = false)
+    private boolean allowComment = true;
+
+    @Column(nullable = false)
+    private boolean commentNotify = true;
+
     @Version
     private long version;
 
@@ -103,6 +110,11 @@ public class BoardPost {
         this.mustRead = mustRead;
         this.updatedAt = Instant.now();
         this.activityAt = this.updatedAt;
+    }
+
+    public void changeCommentOptions(boolean allowComment, boolean commentNotify) {
+        this.allowComment = allowComment;
+        this.commentNotify = commentNotify;
     }
 
     // 임시저장(DRAFT)으로 두거나 at에 등록예약(SCHEDULED). 등록된 글에는 쓰지 않음.

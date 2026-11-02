@@ -48,7 +48,8 @@ public final class BoardResponse {
             String authorName, String authorDepartmentName, Instant createdAt, Instant updatedAt, boolean important,
             boolean mustRead, int viewCount, Instant answeredAt, Instant deletedAt, long version,
             List<Attachment> attachments, List<Comment> comments, boolean canEdit, boolean canDelete,
-            boolean canRestore, boolean canSeeReaders, boolean canComment, PostStatus status, Instant publishAt) {
+            boolean canRestore, boolean canSeeReaders, boolean canComment, PostStatus status, Instant publishAt,
+            boolean allowComment, boolean commentNotify) {
     }
 
     // companyName: 공통 게시판은 여러 회사 사람이 섞이므로 함께 보여 줌

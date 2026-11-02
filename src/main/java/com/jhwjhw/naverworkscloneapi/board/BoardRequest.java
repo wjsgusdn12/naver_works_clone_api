@@ -12,6 +12,7 @@ public final class BoardRequest {
     private BoardRequest() {
     }
 
+    // allowComment·commentNotify: 댓글 허용·댓글 알림(없으면 켜짐). 문의하기는 무시하고 항상 켬.
     // 저장 방식: PUBLISH(바로 등록) · DRAFT(임시저장) · SCHEDULE(publishAt에 등록예약). 없으면 PUBLISH.
     public enum SaveMode {
         PUBLISH, DRAFT, SCHEDULE
@@ -21,10 +22,15 @@ public final class BoardRequest {
     // 제목은 임시저장이면 비워도 됨(서비스가 저장 방식에 따라 검사).
     public record PostCreate(@NotNull Long boardId, @Size(max = 200) String title, String content,
             boolean important, boolean mustRead, @Size(max = 30) List<Long> attachmentIds, SaveMode mode,
-            Instant publishAt) {
+            Instant publishAt, Boolean allowComment, Boolean commentNotify) {
         public PostCreate(Long boardId, String title, String content, boolean important, boolean mustRead,
                 List<Long> attachmentIds) {
             this(boardId, title, content, important, mustRead, attachmentIds, null, null);
+        }
+
+        public PostCreate(Long boardId, String title, String content, boolean important, boolean mustRead,
+                List<Long> attachmentIds, SaveMode mode, Instant publishAt) {
+            this(boardId, title, content, important, mustRead, attachmentIds, mode, publishAt, null, null);
         }
     }
 
@@ -32,10 +38,15 @@ public final class BoardRequest {
     // mode는 임시저장·예약 글에서만 의미 있음(등록된 글은 그대로 등록 상태).
     public record PostUpdate(@Size(max = 200) String title, String content, boolean important,
             boolean mustRead, @Size(max = 30) List<Long> attachmentIds, @NotNull @PositiveOrZero Long expectedVersion,
-            SaveMode mode, Instant publishAt) {
+            SaveMode mode, Instant publishAt, Boolean allowComment, Boolean commentNotify) {
         public PostUpdate(String title, String content, boolean important, boolean mustRead, List<Long> attachmentIds,
                 Long expectedVersion) {
             this(title, content, important, mustRead, attachmentIds, expectedVersion, null, null);
+        }
+
+        public PostUpdate(String title, String content, boolean important, boolean mustRead, List<Long> attachmentIds,
+                Long expectedVersion, SaveMode mode, Instant publishAt) {
+            this(title, content, important, mustRead, attachmentIds, expectedVersion, mode, publishAt, null, null);
         }
     }
 

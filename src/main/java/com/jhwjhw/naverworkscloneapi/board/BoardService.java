@@ -361,7 +361,8 @@ public class BoardService {
                 post.getAnsweredAt(), post.getDeletedAt(), post.getVersion(), attachments, comments,
                 author && !post.isDeleted(), !post.isDeleted() && (author || viewer.admin()),
                 canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
-                !post.isDeleted() && post.isPublished(), post.getStatus(), post.getPublishAt());
+                !post.isDeleted() && post.isPublished() && post.isAllowComment(), post.getStatus(), post.getPublishAt(),
+                post.isAllowComment(), post.isCommentNotify());
     }
 
     // 글을 처음 열면 읽음 기록과 조회수 1. 이미 읽었으면 아무 일 없음.
@@ -409,6 +410,7 @@ public class BoardService {
         boolean flags = board.getType() != BoardType.INQUIRY;
         BoardPost post = postRepository.save(new BoardPost(board, viewer.me(), title(request.title(), mode),
                 body.json(), body.text(), flags && request.important(), flags && request.mustRead()));
+        applyCommentOptions(post, request.allowComment(), request.commentNotify());
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
         if (mode == BoardRequest.SaveMode.PUBLISH) notifyNewPost(viewer, post);
         else post.keepUnpublished(mode == BoardRequest.SaveMode.DRAFT ? PostStatus.DRAFT : PostStatus.SCHEDULED,
@@ -434,6 +436,7 @@ public class BoardService {
         boolean flags = post.getBoard().getType() != BoardType.INQUIRY;
         post.edit(title(request.title(), mode), body.json(), body.text(), flags && request.important(),
                 flags && request.mustRead());
+        applyCommentOptions(post, request.allowComment(), request.commentNotify());
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
         if (!post.isPublished()) {
             if (mode == BoardRequest.SaveMode.PUBLISH) {
@@ -510,6 +513,9 @@ public class BoardService {
         if (!post.isPublished()) {
             throw new BoardException("BOARD_POST_NOT_PUBLISHED", "등록된 글에만 댓글을 달 수 있습니다.");
         }
+        if (!post.isAllowComment()) {
+            throw new BoardException("BOARD_COMMENT_DISABLED", "댓글을 받지 않는 글입니다.");
+        }
         if (post.isDeleted()) {
             throw new BoardException("BOARD_POST_ALREADY_DELETED", "휴지통에 있는 글에는 댓글을 달 수 없습니다.");
         }
@@ -522,6 +528,13 @@ public class BoardService {
         if (answer) postRepository.markAnswered(postId, Instant.now());
         notifyComment(viewer, post, text, answer);
         return detail(membershipId, postId);
+    }
+
+    // 댓글 허용·알림. 값이 없으면 켬, 문의하기는 답변이 댓글이라 항상 켬.
+    private static void applyCommentOptions(BoardPost post, Boolean allowComment, Boolean commentNotify) {
+        boolean inquiry = post.getBoard().getType() == BoardType.INQUIRY;
+        post.changeCommentOptions(inquiry || allowComment == null || allowComment,
+                inquiry || commentNotify == null || commentNotify);
     }
 
     private static BoardRequest.SaveMode modeOf(BoardRequest.SaveMode mode) {
@@ -580,7 +593,7 @@ public class BoardService {
     // 내 글에 남이 댓글을 달면 글쓴이에게. 문의하기에 관리자가 달면 "문의 답변 완료".
     private void notifyComment(Viewer viewer, BoardPost post, String text, boolean answer) {
         Long authorId = post.getAuthor().getId();
-        if (authorId.equals(viewer.id())) return;
+        if (authorId.equals(viewer.id()) || !post.isCommentNotify()) return;
         String writer = viewer.me().getUserAccount().getDisplayName();
         notificationService.create(authorId, NotificationCategory.SYSTEM, answer ? "문의 답변 완료" : "새 댓글",
                 writer + "님 (" + post.getTitle() + "): " + text, postLink(post));

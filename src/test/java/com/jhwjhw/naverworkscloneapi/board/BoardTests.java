@@ -364,6 +364,31 @@ class BoardTests {
     }
 
     @Test
+    void commentsCanBeTurnedOffAndCommentNotificationsSilenced() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var closed = service.create(me.getId(), new BoardRequest.PostCreate(free, "댓글 막은 글", doc("x"), false,
+                false, List.of(), null, null, false, true));
+        assertThat(closed.allowComment()).isFalse();
+        assertThat(closed.canComment()).isFalse();
+        assertThatThrownBy(() -> service.addComment(colleague.getId(), closed.id(),
+                new BoardRequest.CommentCreate("댓글"))).isInstanceOf(BoardException.class);
+
+        // 댓글 알림을 끄면 댓글은 달리지만 글쓴이에게 알림 없음
+        var quiet = service.create(me.getId(), new BoardRequest.PostCreate(free, "조용한 글", doc("x"), false, false,
+                List.of(), null, null, true, false));
+        service.addComment(colleague.getId(), quiet.id(), new BoardRequest.CommentCreate("좋아요"));
+        assertThat(titles(me)).doesNotContain("새 댓글");
+
+        // 문의하기는 설정과 상관없이 댓글·알림이 켜짐(관리자 답변이 댓글)
+        Long inquiry = board(me, BoardType.INQUIRY, company.getName()).id();
+        var question = service.create(me.getId(), new BoardRequest.PostCreate(inquiry, "문의", doc("x"), false, false,
+                List.of(), null, null, false, false));
+        assertThat(question.allowComment()).isTrue();
+        service.addComment(admin.getId(), question.id(), new BoardRequest.CommentCreate("답변"));
+        assertThat(titles(me)).contains("문의 답변 완료");
+    }
+
+    @Test
     void checkedPostsCanBeMarkedReadTogether() {
         Long free = board(me, BoardType.FREE, company.getName()).id();
         var first = write(me, free, "첫 글");
