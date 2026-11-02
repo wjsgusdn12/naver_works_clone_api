@@ -25,8 +25,9 @@ public final class BoardResponse {
             Instant deletedAt) {
     }
 
-    // pinned: 게시판 첫 페이지에만 주는 중요 글(맨 위 고정). nextCursor가 null이면 마지막 페이지.
-    public record PostPage(List<PostSummary> pinned, List<PostSummary> items, Long nextCursor) {
+    // pinned: 게시판 첫 페이지에만 주는 중요 글(맨 위 고정, 검색 중이면 없음). page는 0부터.
+    public record PostPage(List<PostSummary> pinned, List<PostSummary> items, int page, int totalPages,
+            long totalElements) {
     }
 
     // 게시판 홈의 네 영역과 그 영역의 "더 보기"가 열 게시판

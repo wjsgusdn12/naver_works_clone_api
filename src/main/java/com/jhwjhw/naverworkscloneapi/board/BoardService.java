@@ -30,6 +30,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -37,6 +38,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +55,7 @@ public class BoardService {
     static final int PAGE_SIZE = 20;
     static final int HOME_SIZE = 10;
     static final int PINNED_MAX = 20;
+    static final int KEYWORD_MAX = 100;
     static final Duration TRASH_KEEP = Duration.ofDays(30);
     static final int MAX_ATTACHMENTS = 30;
     static final int UPLOADS_PER_MINUTE = 30;
@@ -190,26 +193,37 @@ public class BoardService {
         List<Long> inquiryBoards = boards.stream().filter(board -> board.getType() == BoardType.INQUIRY)
                 .map(Board::getId).toList();
         return new BoardResponse.Home(
-                summaries(viewer, find(viewer, ids(boards), false, false, false, false, null, HOME_SIZE)),
-                summaries(viewer, find(viewer, inquiryBoards, false, false, false, false, null, HOME_SIZE)),
+                summaries(viewer, find(viewer, ids(boards), false, false, false, false, Search.NONE, 0, HOME_SIZE).getContent()),
+                summaries(viewer, find(viewer, inquiryBoards, false, false, false, false, Search.NONE, 0, HOME_SIZE).getContent()),
                 notice == null ? List.of()
-                        : summaries(viewer, find(viewer, List.of(notice.getId()), false, false, false, false, null,
-                                HOME_SIZE)),
+                        : summaries(viewer, find(viewer, List.of(notice.getId()), false, false, false, false, Search.NONE, 0,
+                                HOME_SIZE).getContent()),
                 free == null ? List.of()
-                        : summaries(viewer, find(viewer, List.of(free.getId()), false, false, false, false, null,
-                                HOME_SIZE)),
+                        : summaries(viewer, find(viewer, List.of(free.getId()), false, false, false, false, Search.NONE, 0,
+                                HOME_SIZE).getContent()),
                 notice == null ? null : notice.getId(), free == null ? null : free.getId(),
                 inquiry == null ? null : inquiry.getId());
     }
 
     @Transactional(readOnly = true)
-    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, Long cursor) {
-        return list(membershipId, view, boardId, null, cursor);
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, Integer page) {
+        return list(membershipId, view, boardId, null, page, null);
     }
 
     @Transactional(readOnly = true)
-    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Long cursor) {
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page) {
+        return list(membershipId, view, boardId, type, page, null);
+    }
+
+    // page: 0부터. keyword가 있으면 제목·본문·글쓴이 이름으로 걸러 내고, 중요 글 고정 없이 한 목록으로 보여 줌.
+    @Transactional(readOnly = true)
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
+            String keyword) {
         Viewer viewer = viewer(membershipId);
+        int pageIndex = page == null ? 0 : Math.max(page, 0);
+        String trimmed = keyword == null ? "" : keyword.strip();
+        if (trimmed.length() > KEYWORD_MAX) trimmed = trimmed.substring(0, KEYWORD_MAX);
+        Search search = new Search(!trimmed.isEmpty(), likePattern(trimmed));
         if (view == View.BOARD || view == View.TYPE) {
             List<Long> scope;
             if (view == View.BOARD) {
@@ -220,38 +234,45 @@ public class BoardService {
                 scope = visibleBoards(viewer).stream().filter(board -> board.getType() == type).map(Board::getId)
                         .toList();
             }
-            // 첫 페이지에만 중요 글을 맨 위 고정으로 따로 주고, 아래 목록에서는 뺌.
-            List<BoardResponse.PostSummary> pinned = cursor == null
-                    ? summaries(viewer, find(viewer, scope, false, true, false, false, null, PINNED_MAX))
+            // 검색하지 않을 때 첫 페이지에만 중요 글을 맨 위 고정으로 따로 주고, 아래 목록에서는 뺌.
+            boolean pin = !search.on();
+            List<BoardResponse.PostSummary> pinned = pin && pageIndex == 0
+                    ? summaries(viewer, find(viewer, scope, false, true, false, false, Search.NONE, 0, PINNED_MAX)
+                            .getContent())
                     : List.of();
-            return page(viewer, pinned, find(viewer, scope, false, false, true, false, cursor, PAGE_SIZE + 1));
+            return page(viewer, pinned, find(viewer, scope, false, false, pin, false, search, pageIndex, PAGE_SIZE));
         }
         List<Long> boardIds = ids(visibleBoards(viewer));
         if (view == View.TRASH) {
-            List<BoardPost> rows = boardIds.isEmpty() ? List.of()
+            Page<BoardPost> rows = boardIds.isEmpty() ? Page.empty(PageRequest.of(pageIndex, PAGE_SIZE))
                     : postRepository.findTrash(boardIds, viewer.id(), viewer.admin(), Instant.now().minus(TRASH_KEEP),
-                            cursorOf(cursor), PageRequest.of(0, PAGE_SIZE + 1));
+                            search.on(), search.pattern(), PageRequest.of(pageIndex, PAGE_SIZE));
             return page(viewer, List.of(), rows);
         }
         return page(viewer, List.of(), find(viewer, boardIds, view == View.MUST_READ, view == View.IMPORTANT, false,
-                view == View.MINE, cursor, PAGE_SIZE + 1));
+                view == View.MINE, search, pageIndex, PAGE_SIZE));
     }
 
-    private List<BoardPost> find(Viewer viewer, List<Long> boardIds, boolean mustRead, boolean important,
-            boolean excludeImportant, boolean mine, Long cursor, int size) {
-        if (boardIds.isEmpty()) return List.of();
+    // on이 false면 검색하지 않음. pattern은 like에 바로 넣는 소문자 "%검색어%"(%·_·\는 글자 그대로 찾게 이스케이프).
+    private record Search(boolean on, String pattern) {
+        static final Search NONE = new Search(false, "");
+    }
+
+    private static String likePattern(String keyword) {
+        String escaped = keyword.toLowerCase(Locale.ROOT).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return "%" + escaped + "%";
+    }
+
+    private Page<BoardPost> find(Viewer viewer, List<Long> boardIds, boolean mustRead, boolean important,
+            boolean excludeImportant, boolean mine, Search search, int page, int size) {
+        if (boardIds.isEmpty()) return Page.empty(PageRequest.of(page, size));
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, mustRead, important,
-                excludeImportant, mine, cursorOf(cursor), PageRequest.of(0, size));
+                excludeImportant, mine, search.on(), search.pattern(), PageRequest.of(page, size));
     }
 
-    private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, List<BoardPost> rows) {
-        List<BoardPost> page = rows.stream().limit(PAGE_SIZE).toList();
-        Long next = rows.size() > PAGE_SIZE ? page.getLast().getId() : null;
-        return new BoardResponse.PostPage(pinned, summaries(viewer, page), next);
-    }
-
-    private static long cursorOf(Long cursor) {
-        return cursor == null ? Long.MAX_VALUE : cursor;
+    private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows) {
+        return new BoardResponse.PostPage(pinned, summaries(viewer, rows.getContent()), rows.getNumber(),
+                rows.getTotalPages(), rows.getTotalElements());
     }
 
     // 글 줄 만들기. 읽음·첨부 여부는 페이지 전체를 쿼리 한 번씩으로 확인.

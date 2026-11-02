@@ -249,6 +249,39 @@ class BoardTests {
     }
 
     @Test
+    void searchMatchesTitleBodyOrAuthorAndPagesAreNumbered() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var important = service.create(me.getId(),
+                new BoardRequest.PostCreate(free, "회식 안내", doc("금요일 저녁"), true, false, List.of()));
+        var byBody = service.create(colleague.getId(),
+                new BoardRequest.PostCreate(free, "공지", doc("다음 주 회식 장소"), false, false, List.of()));
+        var other = write(colleague, free, "100% 할인_쿠폰");
+
+        // 검색 중에는 중요 글도 고정 없이 한 목록에, 대소문자·앞뒤 공백 무시
+        var found = service.list(developer.getId(), BoardService.View.BOARD, free, null, 0, "  회식 ");
+        assertThat(found.pinned()).isEmpty();
+        assertThat(ids(found)).containsExactly(byBody.id(), important.id());
+        // 글쓴이 이름으로도 찾음
+        assertThat(ids(service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, "같은 팀")))
+                .containsExactly(other.id(), byBody.id());
+        // %·_는 글자 그대로
+        assertThat(ids(service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, "0% 할인_")))
+                .containsExactly(other.id());
+        // 이스케이프하지 않으면 "%회"가 "회식" 글들과 맞아 버림
+        assertThat(service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, "%회").items()).isEmpty();
+
+        // 쪽 번호: 20개씩
+        for (int index = 0; index < BoardService.PAGE_SIZE; index++) write(me, free, "채우기 " + index);
+        var first = service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, null);
+        var second = service.list(developer.getId(), BoardService.View.LATEST, null, null, 1, null);
+        assertThat(first.totalElements()).isEqualTo(BoardService.PAGE_SIZE + 3);
+        assertThat(first.totalPages()).isEqualTo(2);
+        assertThat(first.items()).hasSize(BoardService.PAGE_SIZE);
+        assertThat(second.page()).isEqualTo(1);
+        assertThat(ids(second)).containsExactly(other.id(), byBody.id(), important.id());
+    }
+
+    @Test
     void editingNeedsTheLatestVersionButCommentsDoNotChangeIt() {
         Long free = board(me, BoardType.FREE, company.getName()).id();
         var post = write(me, free, "처음 제목");

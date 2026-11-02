@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -13,32 +14,40 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
-    // 글 목록(최신순, cursor보다 작은 id). 볼 수 있는 게시판(boardIds) 안에서만 찾고,
-    // 관리자가 아니면 남의 문의하기 글(hiddenType)은 뺌. 필터는 false면 적용하지 않음.
-    @Query("select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
-            + "join fetch a.userAccount "
-            + "where b.id in :boardIds and p.deletedAt is null and p.id < :cursor "
+    // 검색어 조건: search가 false면 적용하지 않고, 아니면 제목·본문 글자·글쓴이 이름 중 하나에 keyword(소문자 like 패턴)가 들어 있어야 함.
+    String SEARCH = "and (:search = false or lower(p.title) like :keyword escape '\\' "
+            + "or lower(p.contentText) like :keyword escape '\\' or lower(u.displayName) like :keyword escape '\\') ";
+
+    String PAGE_WHERE = "where b.id in :boardIds and p.deletedAt is null "
             + "and (:admin = true or b.type <> :hiddenType or a.id = :me) "
             + "and (:mustRead = false or p.mustRead = true) "
             + "and (:important = false or p.important = true) "
             + "and (:excludeImportant = false or p.important = false) "
-            + "and (:mine = false or a.id = :me) "
-            + "order by p.id desc")
-    List<BoardPost> findPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
+            + "and (:mine = false or a.id = :me) " + SEARCH;
+
+    // 글 목록(최신순, 쪽 번호). 볼 수 있는 게시판(boardIds) 안에서만 찾고,
+    // 관리자가 아니면 남의 문의하기 글(hiddenType)은 뺌. 필터는 false면 적용하지 않음.
+    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
+            + "join fetch a.userAccount u " + PAGE_WHERE + "order by p.id desc",
+            countQuery = "select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u "
+                    + PAGE_WHERE)
+    Page<BoardPost> findPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType,
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
             @Param("excludeImportant") boolean excludeImportant, @Param("mine") boolean mine,
-            @Param("cursor") long cursor, Pageable pageable);
+            @Param("search") boolean search, @Param("keyword") String keyword, Pageable pageable);
+
+    String TRASH_WHERE = "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since "
+            + "and (:admin = true or p.deletedBy.id = :me) " + SEARCH;
 
     // 휴지통: since 이후에 지운 글. 관리자가 아니면 내가 지운 글만.
-    @Query("select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
-            + "join fetch a.userAccount "
-            + "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since and p.id < :cursor "
-            + "and (:admin = true or p.deletedBy.id = :me) "
-            + "order by p.id desc")
-    List<BoardPost> findTrash(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
-            @Param("admin") boolean admin, @Param("since") Instant since, @Param("cursor") long cursor,
-            Pageable pageable);
+    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
+            + "join fetch a.userAccount u " + TRASH_WHERE + "order by p.id desc",
+            countQuery = "select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u "
+                    + TRASH_WHERE)
+    Page<BoardPost> findTrash(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
+            @Param("admin") boolean admin, @Param("since") Instant since, @Param("search") boolean search,
+            @Param("keyword") String keyword, Pageable pageable);
 
     @Query("select p from BoardPost p join fetch p.board b join fetch b.company left join fetch b.department "
             + "join fetch p.author a join fetch a.userAccount left join fetch a.department where p.id = :id")
