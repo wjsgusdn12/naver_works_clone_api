@@ -42,6 +42,11 @@ public interface MembershipRepository extends JpaRepository<Membership, Long>, J
             + "and account.enabled = true order by account.displayName")
     List<Membership> findEnabledByDepartmentId(@Param("departmentId") Long departmentId);
 
+    // 사용 중인 구성원 전체(공통 게시판 필독 읽음 확인·공지 알림 대상). 이름순.
+    @Query("select membership from Membership membership join fetch membership.userAccount account "
+            + "left join fetch membership.department where account.enabled = true order by account.displayName")
+    List<Membership> findAllEnabled();
+
     // 사용 중인 관리자 전체(문의하기 새 글 알림 대상). 관리자는 모든 회사 문의를 봄.
     @Query("select membership from Membership membership join fetch membership.userAccount account "
             + "where membership.role = :role and account.enabled = true")

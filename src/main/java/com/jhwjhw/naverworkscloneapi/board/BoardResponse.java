@@ -50,7 +50,8 @@ public final class BoardResponse {
             boolean canRestore, boolean canSeeReaders, boolean canComment) {
     }
 
-    public record Reader(Long membershipId, String name, String departmentName) {
+    // companyName: 공통 게시판은 여러 회사 사람이 섞이므로 함께 보여 줌
+    public record Reader(Long membershipId, String name, String departmentName, String companyName) {
     }
 
     // 필독 읽음 확인: 읽은 사람과 아직 안 읽은 사람(그 게시판을 볼 수 있는 사용 중인 구성원 기준)

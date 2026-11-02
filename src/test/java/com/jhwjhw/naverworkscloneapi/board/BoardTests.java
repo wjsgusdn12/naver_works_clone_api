@@ -3,7 +3,11 @@ package com.jhwjhw.naverworkscloneapi.board;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.jhwjhw.naverworkscloneapi.board.domain.Board;
+import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostRepository;
+import com.jhwjhw.naverworkscloneapi.board.repository.BoardRepository;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Company;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Department;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Membership;
@@ -31,7 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 })
 @ActiveProfiles("test")
 @Transactional
-// 게시판: 권한(회사·부서·관리자·문의하기), 휴지통, 필독 읽음, 본문 검사, 첨부, 이름 변경. 모두 가상 데이터.
+// 게시판: 권한(공통 게시판·회사·부서·관리자·문의하기), 휴지통, 필독 읽음, 본문 검사, 첨부, 이름 변경. 모두 가상 데이터.
 class BoardTests {
     private static final String PNG = "\u0089PNG\r\n\u001a\n";
 
@@ -42,6 +46,8 @@ class BoardTests {
     @Autowired private UserAccountRepository accounts;
     @Autowired private MembershipRepository memberships;
     @Autowired private NotificationService notifications;
+    @Autowired private BoardRepository boards;
+    @Autowired private BoardPostRepository posts;
 
     private Company company;
     private Department sales;
@@ -76,7 +82,8 @@ class BoardTests {
 
     private BoardResponse.BoardItem board(Membership viewer, BoardType type, String companyName) {
         return service.sidebar(viewer.getId()).boards().stream()
-                .filter(item -> item.type() == type && item.companyName().equals(companyName))
+                // 공통 게시판(공지·자유·문의)은 회사와 상관없이 하나
+                .filter(item -> item.type() == type && (type.common() || item.companyName().equals(companyName)))
                 .findFirst().orElseThrow();
     }
 
@@ -100,7 +107,7 @@ class BoardTests {
     }
 
     @Test
-    void usersSeeOnlyTheirCompanyAndDepartmentBoardsWhileAdminSeesAll() {
+    void usersSeeCommonBoardsAndOnlyTheirCompanyAndDepartmentBoardsWhileAdminSeesAll() {
         var mine = service.sidebar(me.getId());
         assertThat(mine.admin()).isFalse();
         assertThat(mine.boards()).extracting(BoardResponse.BoardItem::name)
@@ -108,47 +115,58 @@ class BoardTests {
         // 공지사항은 읽기만, 이름 변경은 관리자만
         assertThat(board(me, BoardType.NOTICE, company.getName()).canWrite()).isFalse();
         assertThat(mine.boards()).noneMatch(BoardResponse.BoardItem::canRename);
+        // 다른 회사 사람도 같은 공통 게시판 + 자기 회사 게시판
+        assertThat(service.sidebar(outsider.getId()).boards()).extracting(BoardResponse.BoardItem::name)
+                .containsExactlyInAnyOrder("공지사항", "자유게시판", "문의하기", "가상 다른 회사", "다른 회사 팀");
 
         var all = service.sidebar(admin.getId());
         assertThat(all.admin()).isTrue();
         assertThat(all.boards()).extracting(BoardResponse.BoardItem::name)
                 .contains("영업팀", "개발팀", "다른 회사 팀", "가상 다른 회사");
-        // 내 회사 게시판이 먼저
-        assertThat(all.boards().getFirst().myCompany()).isTrue();
+        assertThat(all.boards()).filteredOn(item -> item.type() == BoardType.NOTICE).hasSize(1);
 
         // 다른 부서·다른 회사 게시판은 ID를 알아도 없는 것처럼
         Long devBoard = department(admin, dev).id();
-        Long otherFree = board(admin, BoardType.FREE, "가상 다른 회사").id();
+        Long otherCompanyBoard = board(admin, BoardType.COMPANY, "가상 다른 회사").id();
         assertThatThrownBy(() -> service.list(me.getId(), BoardService.View.BOARD, devBoard, null))
                 .isInstanceOf(BoardException.class).hasMessage("게시판을 찾을 수 없습니다.");
-        assertThatThrownBy(() -> write(me, otherFree, "남의 회사"))
+        assertThatThrownBy(() -> write(me, otherCompanyBoard, "남의 회사"))
                 .isInstanceOf(BoardException.class).hasMessage("게시판을 찾을 수 없습니다.");
         assertThatThrownBy(() -> write(me, board(me, BoardType.NOTICE, company.getName()).id(), "공지"))
                 .isInstanceOf(BoardException.class).hasMessage("이 게시판에는 글을 쓸 수 없습니다.");
 
         // 관리자는 어느 회사 게시판에도 씀
-        var adminPost = write(admin, otherFree, "관리자 글");
+        var adminPost = write(admin, otherCompanyBoard, "관리자 글");
         assertThat(service.list(outsider.getId(), BoardService.View.LATEST, null, null).items())
                 .extracting(BoardResponse.PostSummary::id).containsExactly(adminPost.id());
         assertThat(service.list(me.getId(), BoardService.View.LATEST, null, null).items()).isEmpty();
     }
 
     @Test
-    void typeViewGathersOneKindOfBoardAcrossCompaniesForAdminOnly() {
-        var mine = service.create(admin.getId(), new BoardRequest.PostCreate(
-                board(admin, BoardType.NOTICE, company.getName()).id(), "우리 회사 공지", doc("x"), true, false,
+    void commonBoardsAreSharedByEveryoneAndOldPerCompanyBoardsAreMerged() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var notice = service.create(admin.getId(), new BoardRequest.PostCreate(
+                board(admin, BoardType.NOTICE, company.getName()).id(), "전체 공지", doc("x"), true, false,
                 List.of()));
-        var others = write(admin, board(admin, BoardType.NOTICE, "가상 다른 회사").id(), "다른 회사 공지");
-        write(admin, board(admin, BoardType.FREE, company.getName()).id(), "자유 글");
+        var outsiderPost = write(outsider, free, "다른 회사 사람 글");
 
-        var adminPage = service.list(admin.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null);
-        assertThat(adminPage.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(mine.id());
-        assertThat(ids(adminPage)).containsExactly(others.id());
-        assertThat(adminPage.items().getFirst().companyName()).isEqualTo("가상 다른 회사");
-        // 일반 사용자는 자기 회사 공지만
-        var userPage = service.list(me.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null);
-        assertThat(userPage.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(mine.id());
-        assertThat(userPage.items()).isEmpty();
+        // 다른 회사 사람도 같은 공지·자유게시판을 봄, 회사 이름은 붙이지 않음
+        var outsiderNotice = service.list(outsider.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null);
+        assertThat(outsiderNotice.pinned()).extracting(BoardResponse.PostSummary::id).containsExactly(notice.id());
+        var myFree = service.list(me.getId(), BoardService.View.BOARD, free, null);
+        assertThat(ids(myFree)).containsExactly(outsiderPost.id());
+        assertThat(myFree.items().getFirst().companyName()).isEmpty();
+
+        // 예전에 회사마다 만든 자유게시판의 글도 한 게시판으로 보이고, 그 게시판에 쓴 새 글은 대표 게시판으로
+        Board legacy = boards.save(new Board(companies.findById(outsider.getCompany().getId()).orElseThrow(), null,
+                BoardType.FREE, "자유게시판"));
+        var legacyPost = posts.save(new BoardPost(legacy, outsider, "예전 글", doc("예전"), "예전", false, false));
+        assertThat(ids(service.list(me.getId(), BoardService.View.BOARD, free, null)))
+                .containsExactly(legacyPost.getId(), outsiderPost.id());
+        var moved = write(outsider, legacy.getId(), "새 글");
+        assertThat(moved.board().id()).isEqualTo(free);
+        assertThat(service.sidebar(me.getId()).boards()).filteredOn(item -> item.type() == BoardType.FREE)
+                .extracting(BoardResponse.BoardItem::id).containsExactly(free);
         assertThatThrownBy(() -> service.list(me.getId(), BoardService.View.TYPE, null, null, null))
                 .isInstanceOf(BoardException.class);
     }
@@ -233,8 +251,11 @@ class BoardTests {
 
         var readers = service.readers(me.getId(), post.id());
         assertThat(readers.read()).extracting(BoardResponse.Reader::name).containsExactlyInAnyOrder("같은 팀", "개발자");
-        // 대상은 그 회사의 사용 중인 구성원(다른 회사 사람은 없음)
-        assertThat(readers.unread()).extracting(BoardResponse.Reader::name).containsExactlyInAnyOrder("나", "관리자");
+        // 자유게시판은 프로젝트 전체 게시판이라 대상은 회사와 상관없이 사용 중인 구성원 전체(회사 이름 함께)
+        assertThat(readers.unread()).extracting(BoardResponse.Reader::name)
+                .containsExactlyInAnyOrder("나", "관리자", "다른 회사 사람");
+        assertThat(readers.unread()).filteredOn(reader -> reader.name().equals("다른 회사 사람"))
+                .extracting(BoardResponse.Reader::companyName).containsExactly("가상 다른 회사");
         assertThatThrownBy(() -> service.readers(colleague.getId(), post.id())).isInstanceOf(BoardException.class);
 
         // 목록: 필독·중요 모아보기, 게시판에서는 중요 글이 맨 위 고정(아래 목록에는 중복 안 됨)
@@ -253,13 +274,14 @@ class BoardTests {
 
     @Test
     void noticesMustReadInquiriesAndCommentsNotifyTheRightPeople() {
-        // 공지사항: 같은 회사 구성원 모두(글쓴이 제외), 다른 회사는 없음
+        // 공지사항: 전체 사용자(글쓴이 제외)
         Long notice = board(admin, BoardType.NOTICE, company.getName()).id();
         write(admin, notice, "가상 공지");
         assertThat(titles(me)).containsExactly("새 공지사항");
         assertThat(titles(developer)).containsExactly("새 공지사항");
         assertThat(titles(admin)).isEmpty();
-        assertThat(titles(outsider)).isEmpty();
+        // 공지사항은 프로젝트 전체 게시판이라 다른 회사 사람도 받음
+        assertThat(titles(outsider)).containsExactly("새 공지사항");
 
         // 일반 글은 알림 없음, 부서 게시판 필독 글은 그 부서 사람에게만
         Long free = board(me, BoardType.FREE, company.getName()).id();

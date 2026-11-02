@@ -1,6 +1,8 @@
 package com.jhwjhw.naverworkscloneapi.board.repository;
 
 import com.jhwjhw.naverworkscloneapi.board.domain.Board;
+import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -17,6 +19,10 @@ public interface BoardRepository extends JpaRepository<Board, Long> {
     @Query("select b from Board b join fetch b.company left join fetch b.department d "
             + "where b.company.id = :companyId and (d is null or d.enabled = true)")
     List<Board> findActiveByCompanyId(@Param("companyId") Long companyId);
+
+    // 공통 게시판(공지·자유·문의). 예전에 회사마다 만든 것까지 전부, 먼저 만든 순.
+    @Query("select b from Board b join fetch b.company where b.type in :types order by b.id")
+    List<Board> findByTypes(@Param("types") Collection<BoardType> types);
 
     @Query("select b from Board b join fetch b.company left join fetch b.department where b.id = :id")
     Optional<Board> findWithScopeById(@Param("id") Long id);

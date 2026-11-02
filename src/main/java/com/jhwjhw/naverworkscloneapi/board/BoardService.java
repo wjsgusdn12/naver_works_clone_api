@@ -58,6 +58,7 @@ public class BoardService {
     static final int HOME_SIZE = 10;
     static final int PINNED_MAX = 20;
     static final int KEYWORD_MAX = 100;
+    static final List<BoardType> COMMON_TYPES = List.of(BoardType.NOTICE, BoardType.FREE, BoardType.INQUIRY);
     static final Duration TRASH_KEEP = Duration.ofDays(30);
     static final int MAX_ATTACHMENTS = 30;
     static final int UPLOADS_PER_MINUTE = 30;
@@ -90,7 +91,7 @@ public class BoardService {
 
     // ---------- 게시판 ----------
 
-    // 내가 볼 회사·부서의 게시판 중 아직 없는 것을 만듦(가입·부서 추가 뒤 처음 열 때).
+    // 내가 볼 회사·부서의 게시판과 공통 게시판 중 아직 없는 것을 만듦(가입·부서 추가 뒤 처음 열 때).
     // 다른 요청이 동시에 만들면 유일 제약 때문에 이쪽이 실패하는데, 컨트롤러가 그 실패를 무시하고 계속 진행.
     @Transactional
     public void ensureBoards(Long membershipId) {
@@ -106,10 +107,18 @@ public class BoardService {
             else companyKinds.add(board.getCompany().getId() + ":" + board.getType());
         }
         for (Company company : companies) {
-            for (BoardType type : List.of(BoardType.NOTICE, BoardType.FREE, BoardType.INQUIRY, BoardType.COMPANY)) {
-                if (!companyKinds.contains(company.getId() + ":" + type)) {
-                    boardRepository.saveAndFlush(new Board(company, null, type, defaultName(type, company.getName())));
-                }
+            if (!companyKinds.contains(company.getId() + ":" + BoardType.COMPANY)) {
+                boardRepository.saveAndFlush(new Board(company, null, BoardType.COMPANY,
+                        defaultName(BoardType.COMPANY, company.getName())));
+            }
+        }
+        // 공통 게시판(공지·자유·문의)은 회사와 상관없이 종류마다 하나. 하나도 없을 때만 만듦(회사 칸은 처음 만든 사람 회사).
+        Set<BoardType> commonTypes = boardRepository.findByTypes(COMMON_TYPES).stream().map(Board::getType)
+                .collect(Collectors.toSet());
+        for (BoardType type : COMMON_TYPES) {
+            if (!commonTypes.contains(type)) {
+                Company company = viewer.me().getCompany();
+                boardRepository.saveAndFlush(new Board(company, null, type, defaultName(type, company.getName())));
             }
         }
         List<Department> departments = viewer.admin() ? departmentRepository.findAllByOrderByNameAsc()
@@ -138,7 +147,9 @@ public class BoardService {
     public BoardResponse.Sidebar sidebar(Long membershipId) {
         Viewer viewer = viewer(membershipId);
         Set<Long> favorites = new HashSet<>(favoriteRepository.findBoardIds(viewer.id()));
-        List<BoardResponse.BoardItem> items = visibleBoards(viewer).stream()
+        List<Board> visible = visibleBoards(viewer);
+        List<BoardResponse.BoardItem> items = visible.stream()
+                .filter(board -> !board.getType().common() || board == primary(visible, board.getType()))
                 .sorted(Comparator.comparing((Board board) -> !isMyCompany(viewer, board))
                         .thenComparing(board -> board.getCompany().getName())
                         .thenComparing(board -> board.getType().ordinal())
@@ -188,21 +199,19 @@ public class BoardService {
     public BoardResponse.Home home(Long membershipId) {
         Viewer viewer = viewer(membershipId);
         List<Board> boards = visibleBoards(viewer);
-        Long myCompanyId = viewer.me().getCompany().getId();
-        Board notice = companyBoard(boards, myCompanyId, BoardType.NOTICE);
-        Board free = companyBoard(boards, myCompanyId, BoardType.FREE);
-        Board inquiry = companyBoard(boards, myCompanyId, BoardType.INQUIRY);
-        // 관리자는 모든 회사의 문의를, 일반 사용자는 내 문의만(쿼리가 남의 문의를 뺌)
-        List<Long> inquiryBoards = boards.stream().filter(board -> board.getType() == BoardType.INQUIRY)
-                .map(Board::getId).toList();
+        Board notice = primary(boards, BoardType.NOTICE);
+        Board free = primary(boards, BoardType.FREE);
+        Board inquiry = primary(boards, BoardType.INQUIRY);
+        // 관리자는 모든 문의를, 일반 사용자는 내 문의만(쿼리가 남의 문의를 뺌)
+        List<Long> inquiryBoards = ofType(boards, BoardType.INQUIRY);
         return new BoardResponse.Home(
                 summaries(viewer, find(viewer, ids(boards), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0, HOME_SIZE).getContent()),
                 summaries(viewer, find(viewer, inquiryBoards, false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0, HOME_SIZE).getContent()),
                 notice == null ? List.of()
-                        : summaries(viewer, find(viewer, List.of(notice.getId()), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
+                        : summaries(viewer, find(viewer, ofType(boards, BoardType.NOTICE), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
                                 HOME_SIZE).getContent()),
                 free == null ? List.of()
-                        : summaries(viewer, find(viewer, List.of(free.getId()), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
+                        : summaries(viewer, find(viewer, ofType(boards, BoardType.FREE), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
                                 HOME_SIZE).getContent()),
                 notice == null ? null : notice.getId(), free == null ? null : free.getId(),
                 inquiry == null ? null : inquiry.getId());
@@ -254,7 +263,10 @@ public class BoardService {
             List<Long> scope;
             if (view == View.BOARD) {
                 if (boardId == null) throw new BoardException("BOARD_REQUIRED", "게시판을 골라 주세요.");
-                scope = List.of(viewableBoard(viewer, boardId).getId());
+                Board board = viewableBoard(viewer, boardId);
+                // 공통 게시판은 예전에 회사마다 만든 것까지 그 종류 전체가 한 게시판
+                scope = board.getType().common() ? ofType(visibleBoards(viewer), board.getType())
+                        : List.of(board.getId());
             } else {
                 if (type == null) throw new BoardException("BOARD_REQUIRED", "게시판 종류를 골라 주세요.");
                 scope = visibleBoards(viewer).stream().filter(board -> board.getType() == type).map(Board::getId)
@@ -310,7 +322,8 @@ public class BoardService {
         Set<Long> read = new HashSet<>(readRepository.findReadPostIds(viewer.id(), postIds));
         Set<Long> withFiles = new HashSet<>(attachmentRepository.findPostIdsWithFiles(postIds));
         return posts.stream().map(post -> new BoardResponse.PostSummary(post.getId(), post.getBoard().getId(),
-                post.getBoard().getName(), post.getBoard().getType(), post.getBoard().getCompany().getName(),
+                post.getBoard().getName(), post.getBoard().getType(),
+                post.getBoard().getType().common() ? "" : post.getBoard().getCompany().getName(),
                 post.getTitle(), preview(post.getContentText()),
                 post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
                 post.isImportant(), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
@@ -386,6 +399,8 @@ public class BoardService {
         if (!canWrite(viewer, board)) {
             throw new BoardException("BOARD_WRITE_FORBIDDEN", "이 게시판에는 글을 쓸 수 없습니다.");
         }
+        // 공통 게시판 글은 그 종류의 대표 게시판(처음 만든 것)에 모음
+        if (board.getType().common()) board = primary(visibleBoards(viewer), board.getType());
         BoardContent.Sanitized body = content.sanitize(request.content());
         boolean flags = board.getType() != BoardType.INQUIRY;
         BoardPost post = postRepository.save(new BoardPost(board, viewer.me(), title(request.title()), body.json(),
@@ -453,16 +468,15 @@ public class BoardService {
             throw new BoardException("BOARD_READERS_FORBIDDEN", "필독 글의 글쓴이나 관리자만 읽음 현황을 볼 수 있습니다.");
         }
         Board board = post.getBoard();
-        List<Membership> targets = board.getDepartment() != null
-                ? membershipRepository.findEnabledByDepartmentId(board.getDepartment().getId())
-                : membershipRepository.findEnabledByCompanyId(board.getCompany().getId());
+        List<Membership> targets = readersOf(board);
         Set<Long> readerIds = new HashSet<>(readRepository.findReaderIds(postId));
         List<BoardResponse.Reader> read = new ArrayList<>();
         List<BoardResponse.Reader> unread = new ArrayList<>();
         for (Membership target : targets) {
             Department department = target.getDepartment();
             BoardResponse.Reader reader = new BoardResponse.Reader(target.getId(),
-                    target.getUserAccount().getDisplayName(), department == null ? null : department.getName());
+                    target.getUserAccount().getDisplayName(), department == null ? null : department.getName(),
+                    target.getCompany().getName());
             (readerIds.contains(target.getId()) ? read : unread).add(reader);
         }
         return new BoardResponse.Readers(read, unread);
@@ -505,10 +519,7 @@ public class BoardService {
         }
         if (board.getType() != BoardType.NOTICE && !post.isMustRead()) return;
         String title = board.getType() == BoardType.NOTICE ? "새 공지사항" : "새 필독 글";
-        List<Membership> readers = board.getDepartment() != null
-                ? membershipRepository.findEnabledByDepartmentId(board.getDepartment().getId())
-                : membershipRepository.findEnabledByCompanyId(board.getCompany().getId());
-        for (Membership reader : readers) {
+        for (Membership reader : readersOf(board)) {
             if (reader.getId().equals(viewer.id())) continue;
             notificationService.create(reader.getId(), NotificationCategory.SYSTEM, title,
                     "[" + board.getName() + "] " + post.getTitle() + " - " + writer, link);
@@ -522,6 +533,14 @@ public class BoardService {
         String writer = viewer.me().getUserAccount().getDisplayName();
         notificationService.create(authorId, NotificationCategory.SYSTEM, answer ? "문의 답변 완료" : "새 댓글",
                 writer + "님 (" + post.getTitle() + "): " + text, postLink(post));
+    }
+
+    // 그 게시판을 볼 수 있는 사용 중인 구성원: 공통은 전체, 부서는 그 부서, 회사는 그 회사.
+    private List<Membership> readersOf(Board board) {
+        if (board.getType().common()) return membershipRepository.findAllEnabled();
+        return board.getDepartment() != null
+                ? membershipRepository.findEnabledByDepartmentId(board.getDepartment().getId())
+                : membershipRepository.findEnabledByCompanyId(board.getCompany().getId());
     }
 
     private static String postLink(BoardPost post) {
@@ -638,18 +657,23 @@ public class BoardService {
     }
 
     private List<Board> visibleBoards(Viewer viewer) {
-        List<Board> boards = viewer.admin() ? boardRepository.findAllActive()
-                : boardRepository.findActiveByCompanyId(viewer.me().getCompany().getId());
-        return boards.stream().filter(board -> canView(viewer, board)).toList();
+        if (viewer.admin()) return boardRepository.findAllActive();
+        // 일반: 내 회사 게시판(부서는 내 부서만) + 공통 게시판 전체(다른 회사에서 예전에 만든 것 포함)
+        Map<Long, Board> boards = new java.util.LinkedHashMap<>();
+        boardRepository.findActiveByCompanyId(viewer.me().getCompany().getId()).stream()
+                .filter(board -> canView(viewer, board)).forEach(board -> boards.put(board.getId(), board));
+        boardRepository.findByTypes(COMMON_TYPES).forEach(board -> boards.putIfAbsent(board.getId(), board));
+        return List.copyOf(boards.values());
     }
 
+    // 공통 게시판은 누구에게나 "내 게시판"(회사 이름을 붙이지 않음)
     private static boolean isMyCompany(Viewer viewer, Board board) {
-        return board.getCompany().getId().equals(viewer.me().getCompany().getId());
+        return board.getType().common() || board.getCompany().getId().equals(viewer.me().getCompany().getId());
     }
 
-    // 관리자는 전부. 일반은 내 회사 게시판 중 부서 게시판은 내 부서 것만.
+    // 관리자는 전부. 공통 게시판은 누구나. 일반은 내 회사 게시판 중 부서 게시판은 내 부서 것만.
     private static boolean canView(Viewer viewer, Board board) {
-        if (viewer.admin()) return true;
+        if (viewer.admin() || board.getType().common()) return true;
         if (!isMyCompany(viewer, board)) return false;
         if (board.getDepartment() == null) return true;
         Department mine = viewer.me().getDepartment();
@@ -698,9 +722,15 @@ public class BoardService {
                 viewer.admin() && board.getType().renamable());
     }
 
-    private static Board companyBoard(List<Board> boards, Long companyId, BoardType type) {
-        return boards.stream().filter(board -> board.getCompany().getId().equals(companyId)
-                && board.getType() == type).findFirst().orElse(null);
+    // 공통 게시판 한 종류의 대표(가장 먼저 만든 것). 새 글은 여기로 모이고 사이드바에도 이것만 보임.
+    private static Board primary(List<Board> boards, BoardType type) {
+        return boards.stream().filter(board -> board.getType() == type).min(Comparator.comparing(Board::getId))
+                .orElse(null);
+    }
+
+    // 한 종류의 게시판 id 전부(공통 게시판은 예전 회사별 것까지 한 게시판으로 묶음)
+    private static List<Long> ofType(List<Board> boards, BoardType type) {
+        return boards.stream().filter(board -> board.getType() == type).map(Board::getId).toList();
     }
 
     private static List<Long> ids(List<Board> boards) {
