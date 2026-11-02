@@ -20,6 +20,7 @@ public final class BoardRequest {
 
     // 글쓰기. content는 편집기 문서 JSON, attachmentIds는 아래 첨부 목록에 붙일 파일(본문 속 사진은 본문에서 찾음).
     // 제목은 임시저장이면 비워도 됨(서비스가 저장 방식에 따라 검사).
+    // important: 예전 글쓴이용 중요 표시. 이제 쓰지 않아 무시함(중요는 각자 하는 개인 표시).
     public record PostCreate(@NotNull Long boardId, @Size(max = 200) String title, String content,
             boolean important, boolean mustRead, @Size(max = 30) List<Long> attachmentIds, SaveMode mode,
             Instant publishAt, Boolean allowComment, Boolean commentNotify) {

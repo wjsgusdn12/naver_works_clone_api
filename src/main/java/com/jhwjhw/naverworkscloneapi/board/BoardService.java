@@ -5,6 +5,7 @@ import com.jhwjhw.naverworkscloneapi.board.domain.BoardAttachment;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardComment;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardFavorite;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
+import com.jhwjhw.naverworkscloneapi.board.domain.BoardPostImportant;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPostReaction;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPostRead;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
@@ -12,6 +13,7 @@ import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardCommentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardFavoriteRepository;
+import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostImportantRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostReactionRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostReadRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostRepository;
@@ -60,7 +62,6 @@ import org.springframework.web.multipart.MultipartFile;
 public class BoardService {
     static final int PAGE_SIZE = 20;
     static final int HOME_SIZE = 10;
-    static final int PINNED_MAX = 20;
     static final int KEYWORD_MAX = 100;
     static final Duration SCHEDULE_MAX = Duration.ofDays(90);
     static final Duration ENSURE_INTERVAL = Duration.ofMinutes(10);
@@ -77,6 +78,7 @@ public class BoardService {
     private final BoardPostReadRepository readRepository;
     private final BoardCommentRepository commentRepository;
     private final BoardPostReactionRepository reactionRepository;
+    private final BoardPostImportantRepository importantRepository;
     private final BoardAttachmentRepository attachmentRepository;
     private final BoardFavoriteRepository favoriteRepository;
     private final MembershipRepository membershipRepository;
@@ -290,13 +292,8 @@ public class BoardService {
                 scope = visibleBoards(viewer).stream().filter(board -> board.getType() == type).map(Board::getId)
                         .toList();
             }
-            // 검색하지 않을 때 첫 페이지에만 중요 글을 맨 위 고정으로 따로 주고, 아래 목록에서는 뺌.
-            boolean pin = !search.on();
-            List<BoardResponse.PostSummary> pinned = pin && pageIndex == 0
-                    ? summaries(viewer, find(viewer, scope, false, true, false, false, Search.NONE, options, 0,
-                            PINNED_MAX).getContent())
-                    : List.of();
-            return page(viewer, pinned, find(viewer, scope, false, false, pin, false, search, options, pageIndex,
+            // 맨 위 고정 글은 없음(중요는 각자 하는 개인 표시라 게시판 목록 순서에 영향 없음)
+            return page(viewer, List.of(), find(viewer, scope, false, false, false, search, options, pageIndex,
                     size), search);
         }
         if (view == View.DRAFTS || view == View.SCHEDULED) {
@@ -310,7 +307,7 @@ public class BoardService {
                             search.on(), search.pattern(), search.scope().name(), PageRequest.of(pageIndex, size));
             return page(viewer, List.of(), rows, search);
         }
-        return page(viewer, List.of(), find(viewer, boardIds, view == View.MUST_READ, view == View.IMPORTANT, false,
+        return page(viewer, List.of(), find(viewer, boardIds, view == View.MUST_READ, view == View.IMPORTANT,
                 view == View.MINE, search, options, pageIndex, size), search);
     }
 
@@ -338,7 +335,7 @@ public class BoardService {
         if (trimmed.isEmpty() || boardIds.isEmpty()) return new BoardResponse.SearchCounts(0, 0, 0, 0);
         String pattern = likePattern(trimmed);
         Function<SearchScope, Long> count = scope -> postRepository.countPage(boardIds, viewer.id(), viewer.admin(),
-                BoardType.INQUIRY, false, false, false, false, false, true, pattern, scope.name());
+                BoardType.INQUIRY, false, false, false, false, true, pattern, scope.name());
         return new BoardResponse.SearchCounts(count.apply(SearchScope.POST), count.apply(SearchScope.AUTHOR),
                 count.apply(SearchScope.FILE), count.apply(SearchScope.COMMENT));
     }
@@ -348,18 +345,19 @@ public class BoardService {
         return "%" + escaped + "%";
     }
 
+    // important: 내가 중요 표시한 글만
     private Page<BoardPost> find(Viewer viewer, List<Long> boardIds, boolean mustRead, boolean important,
-            boolean excludeImportant, boolean mine, Search search, ListOptions options, int page, int size) {
+            boolean mine, Search search, ListOptions options, int page, int size) {
         if (boardIds.isEmpty()) return Page.empty(PageRequest.of(page, size));
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, mustRead, important,
-                excludeImportant, mine, options.unreadOnly(), search.on(), search.pattern(), search.scope().name(),
+                mine, options.unreadOnly(), search.on(), search.pattern(), search.scope().name(),
                 options.sort() == Sort.ACTIVITY, PageRequest.of(page, size));
     }
 
     // 게시판 홈 한 영역: 최신 HOME_SIZE개(전체 개수는 필요 없어 세지 않음)
     private List<BoardPost> homeRows(Viewer viewer, List<Long> boardIds) {
         if (boardIds.isEmpty()) return List.of();
-        return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, false, false, false,
+        return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, false, false,
                 false, false, false, "", SearchScope.ALL.name(), false,
                 org.springframework.data.domain.Pageable.ofSize(HOME_SIZE)
                         .withPage(0)).getContent();
@@ -399,6 +397,7 @@ public class BoardService {
         List<Long> postIds = posts.stream().map(BoardPost::getId).toList();
         Set<Long> read = new HashSet<>(readRepository.findReadPostIds(viewer.id(), postIds));
         Set<Long> withFiles = new HashSet<>(attachmentRepository.findPostIdsWithFiles(postIds));
+        Set<Long> marked = new HashSet<>(importantRepository.findMarkedPostIds(viewer.id(), postIds));
         Map<Long, Integer> reactionCounts = reactionRepository.countByPostIds(postIds).stream()
                 .collect(Collectors.toMap(row -> (Long) row[0], row -> ((Number) row[1]).intValue()));
         return posts.stream().map(post -> new BoardResponse.PostSummary(post.getId(), post.getBoard().getId(),
@@ -406,7 +405,7 @@ public class BoardService {
                 post.getBoard().getType().common() ? "" : post.getBoard().getCompany().getName(),
                 post.getTitle(), preview(post.getContentText()),
                 post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
-                post.isImportant(), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
+                marked.contains(post.getId()), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
                 post.getDeletedAt(), post.getStatus(), post.getPublishAt(),
                 reactionCounts.getOrDefault(post.getId(), 0), matchTexts.get(post.getId()))).toList();
@@ -454,7 +453,9 @@ public class BoardService {
         return new BoardResponse.PostDetail(post.getId(), boardItem(viewer, post.getBoard(), favorite),
                 post.getTitle(), post.getContentJson(), post.getAuthor().getId(),
                 post.getAuthor().getUserAccount().getDisplayName(), department == null ? null : department.getName(),
-                post.getCreatedAt(), post.getUpdatedAt(), post.isImportant(), post.isMustRead(), post.getViewCount(),
+                post.getCreatedAt(), post.getUpdatedAt(),
+                importantRepository.existsByPostIdAndMembershipId(postId, viewer.id()), post.isMustRead(),
+                post.getViewCount(),
                 post.getAnsweredAt(), post.getDeletedAt(), post.getVersion(), attachments, comments,
                 author && !post.isDeleted(), !post.isDeleted() && (author || viewer.admin()),
                 canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
@@ -483,6 +484,20 @@ public class BoardService {
         }
         result.sort(Comparator.comparing(BoardResponse.Comment::id));
         return result;
+    }
+
+    // 중요 표시(개인 깃발) 켜기·끄기. 볼 수 있는 글이면 무엇이든(임시저장·예약·휴지통 글 포함). 바뀐 상태를 돌려줌.
+    @Transactional
+    public boolean toggleImportant(Long membershipId, Long postId) {
+        Viewer viewer = viewer(membershipId);
+        BoardPost post = readablePost(viewer, postId);
+        return importantRepository.findByPostIdAndMembershipId(postId, viewer.id()).map(mark -> {
+            importantRepository.delete(mark);
+            return false;
+        }).orElseGet(() -> {
+            importantRepository.save(new BoardPostImportant(post, viewer.me()));
+            return true;
+        });
     }
 
     // 리액션을 이모지별로 묶음(먼저 눌린 이모지가 앞). 누른 사람 이름은 누른 순서.
@@ -561,7 +576,7 @@ public class BoardService {
         BoardContent.Sanitized body = content.sanitize(request.content());
         boolean flags = board.getType() != BoardType.INQUIRY;
         BoardPost post = postRepository.save(new BoardPost(board, viewer.me(), title(request.title(), mode),
-                body.json(), body.text(), flags && request.important(), flags && request.mustRead()));
+                body.json(), body.text(), false, flags && request.mustRead()));
         applyCommentOptions(post, request.allowComment(), request.commentNotify());
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
         if (mode == BoardRequest.SaveMode.PUBLISH) notifyNewPost(viewer, post);
@@ -586,8 +601,8 @@ public class BoardService {
         Instant publishAt = scheduleTime(mode, request.publishAt());
         BoardContent.Sanitized body = content.sanitize(request.content());
         boolean flags = post.getBoard().getType() != BoardType.INQUIRY;
-        post.edit(title(request.title(), mode), body.json(), body.text(), flags && request.important(),
-                flags && request.mustRead());
+        // 예전 글쓴이용 중요 표시는 수정할 때 함께 꺼 둠(중요는 이제 개인 표시)
+        post.edit(title(request.title(), mode), body.json(), body.text(), false, flags && request.mustRead());
         applyCommentOptions(post, request.allowComment(), request.commentNotify());
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
         if (!post.isPublished()) {

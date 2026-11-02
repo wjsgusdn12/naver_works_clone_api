@@ -18,7 +18,7 @@ public final class BoardResponse {
     public record Sidebar(List<BoardItem> boards, boolean admin) {
     }
 
-    // 목록의 글 한 줄. companyName: 그 게시판의 회사, read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지,
+    // 목록의 글 한 줄. important: 내가 중요 표시(깃발)한 글. companyName: 그 게시판의 회사, read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지,
     // answered: 문의하기 답변 완료, reactionCount: 이모지 리액션을 남긴 사람 수,
     // matchText: 파일·댓글 검색일 때 검색어와 맞은 파일 이름·댓글 내용(그 밖에는 null).
     public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String companyName,
@@ -54,6 +54,7 @@ public final class BoardResponse {
     public record Reaction(String emoji, int count, boolean mine, List<String> names) {
     }
 
+    // important: 내가 중요 표시(깃발)한 글
     public record PostDetail(Long id, BoardItem board, String title, String content, Long authorMembershipId,
             String authorName, String authorDepartmentName, Instant createdAt, Instant updatedAt, boolean important,
             boolean mustRead, int viewCount, Instant answeredAt, Instant deletedAt, long version,

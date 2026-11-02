@@ -142,6 +142,13 @@ public class BoardController {
                 service.addComment(id(jwt), postId, request));
     }
 
+    // 중요 표시(개인 깃발) 켜기·끄기. 바뀐 상태(true: 표시됨)를 돌려줌.
+    @PostMapping("/post/important")
+    public ApiResponse<Boolean> toggleImportant(@AuthenticationPrincipal Jwt jwt, @RequestParam Long postId) {
+        return ApiResponse.success("BOARD_IMPORTANT_CHANGED", "중요 표시를 바꿨습니다.",
+                service.toggleImportant(id(jwt), postId));
+    }
+
     // 글 리액션 누르기·바꾸기·취소. 바뀐 상세를 돌려줌.
     @PostMapping("/post/reaction")
     public ApiResponse<BoardResponse.PostDetail> react(@AuthenticationPrincipal Jwt jwt, @RequestParam Long postId,

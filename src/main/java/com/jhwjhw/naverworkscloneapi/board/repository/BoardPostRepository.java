@@ -32,8 +32,9 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     String PAGE_WHERE = "where b.id in :boardIds and p.deletedAt is null " + PUBLISHED
             + "and (:admin = true or b.type <> :hiddenType or a.id = :me) "
             + "and (:mustRead = false or p.mustRead = true) "
-            + "and (:important = false or p.important = true) "
-            + "and (:excludeImportant = false or p.important = false) "
+            // important: 내가 중요 표시(깃발)한 글만
+            + "and (:important = false or exists (select i.id from BoardPostImportant i "
+            + "where i.post = p and i.membership.id = :me)) "
             + "and (:mine = false or a.id = :me) "
             + "and (:unread = false or not exists (select r.id from BoardPostRead r "
             + "where r.post = p and r.membership.id = :me)) " + SEARCH;
@@ -50,7 +51,7 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     Page<BoardPost> findPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType,
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
-            @Param("excludeImportant") boolean excludeImportant, @Param("mine") boolean mine,
+            @Param("mine") boolean mine,
             @Param("unread") boolean unread, @Param("search") boolean search, @Param("keyword") String keyword,
             @Param("scope") String scope, @Param("activity") boolean activity, Pageable pageable);
 
@@ -59,7 +60,7 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     long countPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType,
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
-            @Param("excludeImportant") boolean excludeImportant, @Param("mine") boolean mine,
+            @Param("mine") boolean mine,
             @Param("unread") boolean unread, @Param("search") boolean search, @Param("keyword") String keyword,
             @Param("scope") String scope);
 
