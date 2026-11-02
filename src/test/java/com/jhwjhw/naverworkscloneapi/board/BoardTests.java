@@ -178,6 +178,40 @@ class BoardTests {
                 .isInstanceOf(BoardException.class);
     }
 
+    // 답글: 한 단계만(답글에 답하면 같은 맨 위 댓글 아래로), 원댓글을 지워도 답글이 있으면 "삭제된 댓글" 자리로 남음.
+    @Test
+    void repliesStayOneLevelAndKeepDeletedParentPlace() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var post = write(me, free, "답글 받을 글");
+        var withComment = service.addComment(colleague.getId(), post.id(), new BoardRequest.CommentCreate("첫 댓글"));
+        Long rootId = withComment.comments().getFirst().id();
+        var withReply = service.addComment(me.getId(), post.id(), new BoardRequest.CommentCreate("답글", rootId));
+        Long replyId = withReply.comments().getLast().id();
+        // 답글에 답해도 맨 위 댓글 아래로
+        var nested = service.addComment(colleague.getId(), post.id(),
+                new BoardRequest.CommentCreate("답글의 답글", replyId));
+        assertThat(nested.comments()).extracting(BoardResponse.Comment::parentId)
+                .containsExactly(null, rootId, rootId);
+
+        // 원댓글을 지우면 내용 없는 자리만, 답글은 그대로
+        var afterDelete = service.deleteComment(colleague.getId(), rootId);
+        assertThat(afterDelete.comments()).hasSize(3);
+        assertThat(afterDelete.comments().getFirst()).satisfies(placeholder -> {
+            assertThat(placeholder.deleted()).isTrue();
+            assertThat(placeholder.content()).isEmpty();
+            assertThat(placeholder.authorName()).isNull();
+        });
+
+        // 지운 댓글·다른 글의 댓글에는 답글 불가
+        assertThatThrownBy(() -> service.addComment(me.getId(), post.id(),
+                new BoardRequest.CommentCreate("x", rootId)))
+                .isInstanceOf(BoardException.class).hasMessage("답글을 달 댓글을 찾을 수 없습니다.");
+        var other = write(me, free, "다른 글");
+        assertThatThrownBy(() -> service.addComment(me.getId(), other.id(),
+                new BoardRequest.CommentCreate("x", replyId)))
+                .isInstanceOf(BoardException.class).hasMessage("답글을 달 댓글을 찾을 수 없습니다.");
+    }
+
     // 리액션: 한 사람 글마다 하나, 같은 걸 다시 누르면 취소, 다른 걸 누르면 바꿈. 목록에는 남긴 사람 수.
     @Test
     void reactionsAreOnePerPersonAndToggleOrSwitch() {
