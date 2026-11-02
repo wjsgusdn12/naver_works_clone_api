@@ -111,23 +111,24 @@ class BoardTests {
         var mine = service.sidebar(me.getId());
         assertThat(mine.admin()).isFalse();
         assertThat(mine.boards()).extracting(BoardResponse.BoardItem::name)
-                .containsExactlyInAnyOrder("공지사항", "자유게시판", "문의하기", "가상 게시판 회사", "영업팀");
+                .containsExactlyInAnyOrder("공지사항", "자유게시판", "문의하기", "영업팀");
         // 공지사항은 읽기만, 이름 변경은 관리자만
         assertThat(board(me, BoardType.NOTICE, company.getName()).canWrite()).isFalse();
         assertThat(mine.boards()).noneMatch(BoardResponse.BoardItem::canRename);
-        // 다른 회사 사람도 같은 공통 게시판 + 자기 회사 게시판
+        // 다른 회사 사람도 같은 공통 게시판 + 자기 부서 게시판. 회사는 경로일 뿐 게시판이 아님
         assertThat(service.sidebar(outsider.getId()).boards()).extracting(BoardResponse.BoardItem::name)
-                .containsExactlyInAnyOrder("공지사항", "자유게시판", "문의하기", "가상 다른 회사", "다른 회사 팀");
+                .containsExactlyInAnyOrder("공지사항", "자유게시판", "문의하기", "다른 회사 팀");
 
         var all = service.sidebar(admin.getId());
         assertThat(all.admin()).isTrue();
         assertThat(all.boards()).extracting(BoardResponse.BoardItem::name)
-                .contains("영업팀", "개발팀", "다른 회사 팀", "가상 다른 회사");
+                .contains("영업팀", "개발팀", "다른 회사 팀")
+                .doesNotContain("가상 게시판 회사", "가상 다른 회사");
         assertThat(all.boards()).filteredOn(item -> item.type() == BoardType.NOTICE).hasSize(1);
 
         // 다른 부서·다른 회사 게시판은 ID를 알아도 없는 것처럼
         Long devBoard = department(admin, dev).id();
-        Long otherCompanyBoard = board(admin, BoardType.COMPANY, "가상 다른 회사").id();
+        Long otherCompanyBoard = department(admin, outsider.getDepartment()).id();
         assertThatThrownBy(() -> service.list(me.getId(), BoardService.View.BOARD, devBoard, null))
                 .isInstanceOf(BoardException.class).hasMessage("게시판을 찾을 수 없습니다.");
         assertThatThrownBy(() -> write(me, otherCompanyBoard, "남의 회사"))
@@ -135,7 +136,7 @@ class BoardTests {
         assertThatThrownBy(() -> write(me, board(me, BoardType.NOTICE, company.getName()).id(), "공지"))
                 .isInstanceOf(BoardException.class).hasMessage("이 게시판에는 글을 쓸 수 없습니다.");
 
-        // 관리자는 어느 회사 게시판에도 씀
+        // 관리자는 어느 회사 부서 게시판에도 씀
         var adminPost = write(admin, otherCompanyBoard, "관리자 글");
         assertThat(service.list(outsider.getId(), BoardService.View.LATEST, null, null).items())
                 .extracting(BoardResponse.PostSummary::id).containsExactly(adminPost.id());

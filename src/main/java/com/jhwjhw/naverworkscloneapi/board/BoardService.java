@@ -91,7 +91,7 @@ public class BoardService {
 
     // ---------- 게시판 ----------
 
-    // 내가 볼 회사·부서의 게시판과 공통 게시판 중 아직 없는 것을 만듦(가입·부서 추가 뒤 처음 열 때).
+    // 내가 볼 부서 게시판과 공통 게시판 중 아직 없는 것을 만듦(가입·부서 추가 뒤 처음 열 때). 회사 게시판은 만들지 않음.
     // 다른 요청이 동시에 만들면 유일 제약 때문에 이쪽이 실패하는데, 컨트롤러가 그 실패를 무시하고 계속 진행.
     @Transactional
     public void ensureBoards(Long membershipId) {
@@ -100,17 +100,9 @@ public class BoardService {
         Set<Long> companyIds = companies.stream().map(Company::getId).collect(Collectors.toSet());
         List<Board> existing = viewer.admin() ? boardRepository.findAll()
                 : boardRepository.findActiveByCompanyId(viewer.me().getCompany().getId());
-        Set<String> companyKinds = new HashSet<>();
         Set<Long> departmentIds = new HashSet<>();
         for (Board board : existing) {
             if (board.getDepartment() != null) departmentIds.add(board.getDepartment().getId());
-            else companyKinds.add(board.getCompany().getId() + ":" + board.getType());
-        }
-        for (Company company : companies) {
-            if (!companyKinds.contains(company.getId() + ":" + BoardType.COMPANY)) {
-                boardRepository.saveAndFlush(new Board(company, null, BoardType.COMPANY,
-                        defaultName(BoardType.COMPANY, company.getName())));
-            }
         }
         // 공통 게시판(공지·자유·문의)은 회사와 상관없이 종류마다 하나. 하나도 없을 때만 만듦(회사 칸은 처음 만든 사람 회사).
         Set<BoardType> commonTypes = boardRepository.findByTypes(COMMON_TYPES).stream().map(Board::getType)
@@ -172,7 +164,7 @@ public class BoardService {
         return true;
     }
 
-    // 회사·부서 게시판 이름 변경(관리자만)
+    // 부서 게시판 이름 변경(관리자만)
     @Transactional
     public BoardResponse.BoardItem rename(Long membershipId, Long boardId, BoardRequest.Rename request) {
         Viewer viewer = viewer(membershipId);
@@ -181,7 +173,7 @@ public class BoardService {
             throw new BoardException("BOARD_ADMIN_REQUIRED", "관리자만 게시판 이름을 바꿀 수 있습니다.");
         }
         if (!board.getType().renamable()) {
-            throw new BoardException("BOARD_NOT_RENAMABLE", "회사·부서 게시판만 이름을 바꿀 수 있습니다.");
+            throw new BoardException("BOARD_NOT_RENAMABLE", "부서 게시판만 이름을 바꿀 수 있습니다.");
         }
         String name = request.name().strip();
         if (name.isEmpty() || name.length() > 30) {
@@ -657,7 +649,7 @@ public class BoardService {
     }
 
     private List<Board> visibleBoards(Viewer viewer) {
-        if (viewer.admin()) return boardRepository.findAllActive();
+        if (viewer.admin()) return boardRepository.findAllActive().stream().filter(board -> canView(viewer, board)).toList();
         // 일반: 내 회사 게시판(부서는 내 부서만) + 공통 게시판 전체(다른 회사에서 예전에 만든 것 포함)
         Map<Long, Board> boards = new java.util.LinkedHashMap<>();
         boardRepository.findActiveByCompanyId(viewer.me().getCompany().getId()).stream()
@@ -671,11 +663,13 @@ public class BoardService {
         return board.getType().common() || board.getCompany().getId().equals(viewer.me().getCompany().getId());
     }
 
-    // 관리자는 전부. 공통 게시판은 누구나. 일반은 내 회사 게시판 중 부서 게시판은 내 부서 것만.
+    // 회사는 경로일 뿐이라 예전 회사 게시판(COMPANY)은 아무도 못 봄. 공통 게시판은 누구나.
+    // 부서 게시판: 관리자는 전부, 일반은 내 부서 것만.
     private static boolean canView(Viewer viewer, Board board) {
+        if (board.getType() == BoardType.COMPANY) return false;
         if (viewer.admin() || board.getType().common()) return true;
         if (!isMyCompany(viewer, board)) return false;
-        if (board.getDepartment() == null) return true;
+        if (board.getDepartment() == null) return false;
         Department mine = viewer.me().getDepartment();
         return mine != null && mine.getId().equals(board.getDepartment().getId());
     }
