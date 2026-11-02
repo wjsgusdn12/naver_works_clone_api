@@ -20,7 +20,7 @@ import org.springframework.stereotype.Repository;
 public class ApiMetricBucketRepository {
     // 돌려 쓰는 칸 종류. bucket 열에는 그 단위로 센 칸 번호(1970년부터 5분·1분 단위)가 들어감.
     public enum Ring {
-        // 5분 칸 300자리(25시간분): 이번 시간 합계·오늘 그래프
+        // 5분 칸 300자리(25시간분): 최근 24시간 그래프(최근 60분에서 1분 기록이 빈 구간도 채움)
         FIVE_MINUTES("api_metric_bucket", 300),
         // 1분 칸 70자리(70분): 이번 시간 1분 그래프
         ONE_MINUTE("api_metric_minute", 70);

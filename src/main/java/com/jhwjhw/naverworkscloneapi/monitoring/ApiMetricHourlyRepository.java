@@ -88,6 +88,29 @@ public class ApiMetricHourlyRepository {
         return result;
     }
 
+    // [from, to) 기간의 1시간 요약을 시간별 집계 칸으로 읽음. 전체 합계 행 + API별 행을 함께 담음
+    // (최근 24시간 그래프에서 5분 기록이 없는 시간을 채울 때 순위까지 맞추기 위해).
+    public Map<Instant, MetricsBucket> readHours(Instant from, Instant to) {
+        Map<Instant, MetricsBucket> result = new HashMap<>();
+        jdbc.query("SELECT hour_start, endpoint, request_count, client_errors, server_errors, duration_sum_ms, "
+                + LATENCY_NAMES + " FROM api_metric_hourly WHERE hour_start >= ? AND hour_start < ?", resultSet -> {
+                    MetricsBucket bucket = result.computeIfAbsent(resultSet.getTimestamp("hour_start").toInstant(),
+                            key -> new MetricsBucket());
+                    long count = resultSet.getLong("request_count");
+                    long clientErrors = resultSet.getLong("client_errors");
+                    long serverErrors = resultSet.getLong("server_errors");
+                    long durationSum = resultSet.getLong("duration_sum_ms");
+                    if (TOTAL.equals(resultSet.getString("endpoint"))) {
+                        bucket.addTotals(count, clientErrors, serverErrors, durationSum);
+                        for (int i = 0; i < LATENCY_COLUMNS; i++) bucket.addLatency(i, resultSet.getLong("latency_" + i));
+                    } else {
+                        bucket.endpoint(resultSet.getString("endpoint")).add(count, clientErrors, serverErrors,
+                                durationSum);
+                    }
+                }, Timestamp.from(from), Timestamp.from(to));
+        return result;
+    }
+
     // [from, to) 기간의 API별 합계(순위용). DB가 API별로 더해서 돌려주므로 행이 많아도 결과는 API 수만큼.
     public Map<String, MetricsBucket.EndpointStats> readEndpointTotals(Instant from, Instant to) {
         Map<String, MetricsBucket.EndpointStats> result = new HashMap<>();

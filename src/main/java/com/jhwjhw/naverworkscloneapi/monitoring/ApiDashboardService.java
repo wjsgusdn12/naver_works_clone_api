@@ -2,14 +2,9 @@ package com.jhwjhw.naverworkscloneapi.monitoring;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.ZonedDateTime;
-import java.time.temporal.ChronoUnit;
-import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -17,7 +12,6 @@ import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.HashSet;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
@@ -26,15 +20,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 // DB의 1분·5분 칸과 1시간 요약을 읽어 대시보드 숫자로 정리(모두 DB라 서버·Redis를 재시작해도 남음).
-// - 숫자 카드와 순위 합계: 시·일·주·월 모두 빠짐없는 1시간 요약 기준(서로 항상 맞아떨어짐).
-// - 그래프: 이번 시간 1분, 오늘 5분 칸. 잘게 쪼갠 기록이 없는 구간(예: 기능 추가 전)은
-//   큰 단위 기록(5분·1시간 합계)을 그 구간의 칸마다 고르게 나눠 채우고 추정값(estimated)으로 표시.
-// 기간은 "지금부터 거꾸로"가 아니라 달력 기준으로 자름(한국 시간 기본).
-// - 이번 시간: 14:00~14:59 (1분 점 60개)
-// - 오늘: 00:00~23:59 (5분 점 288개)
-// - 이번 주: 일요일 00시~토요일 23시 (1시간 점 168개)
-// - 이번 달: 1일~말일 (1시간 점 672~744개)
-// 아직 오지 않은 시간의 점도 자리는 만들어 두고(값 0), 화면이 "기록 전"으로 비워 그림.
+// 기간은 모두 "지금부터 거꾸로" 밀려가는 창(정각·자정이 지나도 그래프가 비지 않음). 맨 오른쪽 점이 지금 칸.
+// - 최근 60분: 1분 점 60개
+// - 최근 24시간: 5분 점 288개
+// - 최근 7일: 1시간 점 168개 / 최근 30일: 1시간 점 720개(1시간 요약뿐이라 정시 단위로 밀려감)
+// 숫자 카드·순위 합계는 그래프 점과 같은 칸을 더한 값(서로 항상 맞아떨어짐).
+// 잘게 쪼갠 기록이 없는 구간(예: 기능 추가 전)은 큰 단위 기록(5분·1시간 합계)을
+// 그 구간의 칸마다 고르게 나눠 채우고 추정값(estimated)으로 표시.
 @Service
 public class ApiDashboardService {
     static final int TOP_COUNT = 5;
@@ -43,8 +35,9 @@ public class ApiDashboardService {
     private static final long BUCKETS_PER_HOUR = 3600 / ApiMetricsRecorder.BUCKET_SECONDS;
     static final int DAY_BUCKETS = 24 * (int) BUCKETS_PER_HOUR;
     static final int WEEK_HOURS = 24 * 7;
+    static final int MONTH_HOURS = 24 * 30;
     static final int HOUR_MINUTES = 60;
-    static final int DAY_HOURS = 24;
+    private static final int DAY_HOURS = 24;
     private static final int MINUTES_PER_BUCKET = (int) (ApiMetricsRecorder.BUCKET_SECONDS / 60);
 
     private final ApiMetricsRecorder recorder;
@@ -80,12 +73,12 @@ public class ApiDashboardService {
         recorder.flushHourly();
         reporter.report();
 
-        ZonedDateTime local = now.atZone(zone);
         Period period = switch (range) {
             case HOUR -> hourPeriod(now);
-            case DAY -> dayPeriod(local, now);
-            case WEEK -> weekPeriod(local);
-            case MONTH -> monthPeriod(local);
+            case DAY -> dayPeriod(now);
+            // 순위 옆 작은 추이선: 최근 7일은 24시간씩 7칸, 최근 30일은 1시간 칸 그대로
+            case WEEK -> hourlyPeriod(now, WEEK_HOURS, DAY_HOURS);
+            case MONTH -> hourlyPeriod(now, MONTH_HOURS, 1);
         };
 
         List<ApiDashboardResponse.Server> servers = store.servers(now).stream()
@@ -124,48 +117,38 @@ public class ApiDashboardService {
         return new Period(fine.total(), fine.points(), ranking);
     }
 
-    // 오늘: 숫자 카드·순위 합계는 1시간 요약, 그래프는 5분 칸 288개(5분 기록이 없는 시간은 1시간 요약으로 채움).
-    private Period dayPeriod(ZonedDateTime local, Instant now) {
-        Instant dayStart = local.toLocalDate().atStartOfDay(zone).toInstant();
-        Instant dayEnd = dayStart.plus(Duration.ofHours(DAY_HOURS));
-        Map<Instant, MetricsBucket> hours = hourlyRepository.readTotals(dayStart);
-        MetricsBucket total = new MetricsBucket();
-        for (int hour = 0; hour < DAY_HOURS; hour++) {
-            MetricsBucket data = hours.get(dayStart.plus(Duration.ofHours(hour)));
-            if (data != null) total.add(data);
-        }
-        long dayFirstBucket = ApiMetricsRecorder.bucketOf(dayStart);
+    // 최근 24시간: 지금 5분 칸까지 5분 칸 288개. 숫자 카드·순위 합계도 그래프와 같은 288칸을 더한 값.
+    // 5분 기록이 없는 1시간은 1시간 요약(API별 행 포함)을 12칸으로 나눠 채움(창이 시간 중간에서 시작하면 그 시간은 창 안 칸만).
+    private Period dayPeriod(Instant now) {
+        long lastBucket = ApiMetricsRecorder.bucketOf(now);
+        long firstBucket = lastBucket - DAY_BUCKETS + 1;
+        Instant firstStart = Instant.ofEpochSecond(firstBucket * ApiMetricsRecorder.BUCKET_SECONDS);
+        Instant firstHour = ApiMetricsRecorder.hourOf(firstStart);
+        // 첫 칸이 1시간 안에서 몇 번째 5분 칸인지(1시간 경계에 맞춰 묶기 위해)
+        int offset = (int) (Duration.between(firstHour, firstStart).toMinutes() / MINUTES_PER_BUCKET);
+        Map<Instant, MetricsBucket> hours = hourlyRepository.readHours(firstHour, now);
         Map<Long, MetricsBucket> buckets = bucketRepository.read(ApiMetricBucketRepository.Ring.FIVE_MINUTES,
-                dayFirstBucket, ApiMetricsRecorder.bucketOf(now));
-        FineSeries fine = fineSeries(DAY_BUCKETS, 0, (int) BUCKETS_PER_HOUR, MINUTES_PER_BUCKET,
-                index -> Instant.ofEpochSecond((dayFirstBucket + index) * ApiMetricsRecorder.BUCKET_SECONDS),
-                index -> buckets.get(dayFirstBucket + index), group -> hours.get(dayStart.plus(Duration.ofHours(group))));
-        ApiDashboardResponse.Ranking ranking = ranking(hourlyRepository.readEndpointTotals(dayStart, dayEnd),
-                fine.bins(), names -> daySeriesWithHourly(fine, dayStart, dayEnd, names));
-        return new Period(total, fine.points(), ranking);
+                firstBucket, lastBucket);
+        FineSeries fine = fineSeries(DAY_BUCKETS, offset, (int) BUCKETS_PER_HOUR, MINUTES_PER_BUCKET,
+                index -> Instant.ofEpochSecond((firstBucket + index) * ApiMetricsRecorder.BUCKET_SECONDS),
+                index -> buckets.get(firstBucket + index), group -> hours.get(firstHour.plus(Duration.ofHours(group))));
+        ApiDashboardResponse.Ranking ranking = ranking(fine.total().getEndpoints(), fine.bins(),
+                names -> fine.series());
+        return new Period(fine.total(), fine.points(), ranking);
     }
 
-    // 이번 주(일~토): 1시간 요약 168칸. 순위 옆 작은 추이선은 하루 단위.
-    private Period weekPeriod(ZonedDateTime local) {
-        LocalDate weekFirstDay = local.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY));
-        Instant weekStart = weekFirstDay.atStartOfDay(zone).toInstant();
-        Instant weekEnd = weekFirstDay.plusDays(7).atStartOfDay(zone).toInstant();
-        HourlyTrend hourly = hourlyTrend(weekStart, weekEnd);
-        List<Instant> bins = dayStarts(weekFirstDay, 7);
-        ApiDashboardResponse.Ranking ranking = ranking(hourlyRepository.readEndpointTotals(weekStart, weekEnd), bins,
-                names -> dailySeries(weekStart, weekEnd, weekFirstDay, bins.size(), names));
-        return new Period(hourly.total(), hourly.points(), ranking);
-    }
-
-    // 이번 달(1일~말일): 1시간 요약 그대로. 순위 옆 작은 추이선도 1시간 단위.
-    private Period monthPeriod(ZonedDateTime local) {
-        LocalDate monthFirstDay = local.toLocalDate().withDayOfMonth(1);
-        Instant monthStart = monthFirstDay.atStartOfDay(zone).toInstant();
-        Instant monthEnd = monthFirstDay.plusMonths(1).atStartOfDay(zone).toInstant();
-        HourlyTrend hourly = hourlyTrend(monthStart, monthEnd);
-        List<Instant> bins = hourly.points().stream().map(ApiDashboardResponse.TrendPoint::startAt).toList();
-        ApiDashboardResponse.Ranking ranking = ranking(hourlyRepository.readEndpointTotals(monthStart, monthEnd),
-                bins, names -> hourlySeries(monthStart, monthEnd, bins.size(), names));
+    // 최근 7일·30일: 지금 시간까지 1시간 요약 hours칸(정시 단위로 밀려감).
+    // 순위 옆 작은 추이선은 binHours시간씩 묶은 칸.
+    private Period hourlyPeriod(Instant now, int hours, int binHours) {
+        Instant lastHour = ApiMetricsRecorder.hourOf(now);
+        Instant from = lastHour.minus(Duration.ofHours(hours - 1L));
+        Instant to = lastHour.plus(Duration.ofHours(1));
+        HourlyTrend hourly = hourlyTrend(from, to);
+        int binCount = hours / binHours;
+        List<Instant> bins = IntStream.range(0, binCount)
+                .mapToObj(bin -> from.plus(Duration.ofHours((long) bin * binHours))).toList();
+        ApiDashboardResponse.Ranking ranking = ranking(hourlyRepository.readEndpointTotals(from, to), bins,
+                names -> hourlySeries(from, to, binHours, binCount, names));
         return new Period(hourly.total(), hourly.points(), ranking);
     }
 
@@ -186,9 +169,9 @@ public class ApiDashboardService {
     }
 
     // 잘게 쪼갠 그래프 한 벌: 점, 칸 시작 시각, API별 [호출 수, 걸린 시간 합](순위 옆 작은 추이선용),
-    // 큰 단위로 채운 묶음 번호(fallbackGroups), 모든 칸을 더한 합계(total).
+    // 모든 칸을 더한 합계(total).
     private record FineSeries(List<ApiDashboardResponse.TrendPoint> points, List<Instant> bins,
-            Map<String, long[][]> series, Set<Integer> fallbackGroups, MetricsBucket total) {
+            Map<String, long[][]> series, MetricsBucket total) {
     }
 
     // count개의 작은 칸으로 그래프를 만듦. 큰 칸(group) 하나는 작은 칸 perGroup개이고,
@@ -199,7 +182,6 @@ public class ApiDashboardService {
         List<ApiDashboardResponse.TrendPoint> points = new ArrayList<>();
         List<Instant> bins = new ArrayList<>();
         Map<String, long[][]> series = new HashMap<>();
-        Set<Integer> fallbackGroups = new HashSet<>();
         MetricsBucket total = new MetricsBucket();
         for (int group = 0; group * perGroup < count + offset; group++) {
             // 이 큰 칸의 첫 자리가 그래프에서 몇 번째 칸인지(첫 묶음은 음수일 수 있음)
@@ -210,7 +192,6 @@ public class ApiDashboardService {
                     .allMatch(index -> fineAt.apply(index) == null || fineAt.apply(index).isEmpty());
             MetricsBucket coarse = groupAt.apply(group);
             boolean useCoarse = fineEmpty && coarse != null && !coarse.isEmpty();
-            if (useCoarse) fallbackGroups.add(group);
             for (int index = first; index < last; index++) {
                 Instant start = startOf.apply(index);
                 bins.add(start);
@@ -231,34 +212,7 @@ public class ApiDashboardService {
                 total.add(data);
             }
         }
-        return new FineSeries(points, bins, series, fallbackGroups, total);
-    }
-
-    // 오늘 작은 추이선: 1시간 요약으로 채운 시간은 1시간 합계 행에 API별 값이 없으므로 DB의 API별 1시간 기록을 더함.
-    private Map<String, long[][]> daySeriesWithHourly(FineSeries fine, Instant dayStart, Instant dayEnd,
-            Set<String> endpoints) {
-        Map<String, long[][]> series = new HashMap<>();
-        fine.series().forEach((endpoint, values) -> series.put(endpoint,
-                new long[][] { values[0].clone(), values[1].clone() }));
-        if (fine.fallbackGroups().isEmpty()) return series;
-        int size = fine.bins().size();
-        for (ApiMetricHourlyRepository.EndpointHour row : hourlyRepository.readEndpointHours(dayStart, dayEnd,
-                endpoints)) {
-            int hour = (int) Duration.between(dayStart, row.hourStart()).toHours();
-            if (!fine.fallbackGroups().contains(hour)) continue;
-            int first = hour * (int) BUCKETS_PER_HOUR;
-            int parts = (int) BUCKETS_PER_HOUR;
-            long[][] values = series.computeIfAbsent(row.endpoint(), key -> new long[2][size]);
-            // 그래프처럼 1시간 값을 5분 칸 12개에 고르게 나눔.
-            long before = 0;
-            for (int part = 0; part < parts; part++) {
-                long requests = share(row.requests(), parts, part);
-                values[0][first + part] += requests;
-                values[1][first + part] += proportional(row.durationSumMs(), before, requests, row.requests());
-                before += requests;
-            }
-        }
-        return series;
+        return new FineSeries(points, bins, series, total);
     }
 
     // total을 parts칸에 고르게 나눈 index번째 몫(나머지는 앞 칸부터 1씩). 몫을 모두 더하면 total.
@@ -309,36 +263,16 @@ public class ApiDashboardService {
         });
     }
 
-    // firstDay부터 days일의 0시 시각 목록
-    private List<Instant> dayStarts(LocalDate firstDay, int days) {
-        List<Instant> starts = new ArrayList<>();
-        for (int day = 0; day < days; day++) starts.add(firstDay.plusDays(day).atStartOfDay(zone).toInstant());
-        return starts;
-    }
-
-    // DB의 API별 1시간 기록을 하루 단위로 묶음(고른 API만).
-    private Map<String, long[][]> dailySeries(Instant from, Instant to, LocalDate firstDay, int days,
+    // DB의 API별 1시간 기록을 from부터 binHours시간씩 묶은 binCount칸으로(고른 API만).
+    private Map<String, long[][]> hourlySeries(Instant from, Instant to, int binHours, int binCount,
             Set<String> endpoints) {
         Map<String, long[][]> series = new HashMap<>();
         for (ApiMetricHourlyRepository.EndpointHour row : hourlyRepository.readEndpointHours(from, to, endpoints)) {
-            int day = (int) ChronoUnit.DAYS.between(firstDay, row.hourStart().atZone(zone).toLocalDate());
-            if (day < 0 || day >= days) continue;
-            long[][] values = series.computeIfAbsent(row.endpoint(), key -> new long[2][days]);
-            values[0][day] += row.requests();
-            values[1][day] += row.durationSumMs();
-        }
-        return series;
-    }
-
-    // DB의 API별 1시간 기록을 from부터 1시간 칸 그대로(고른 API만).
-    private Map<String, long[][]> hourlySeries(Instant from, Instant to, int hours, Set<String> endpoints) {
-        Map<String, long[][]> series = new HashMap<>();
-        for (ApiMetricHourlyRepository.EndpointHour row : hourlyRepository.readEndpointHours(from, to, endpoints)) {
-            int hour = (int) Duration.between(from, row.hourStart()).toHours();
-            if (hour < 0 || hour >= hours) continue;
-            long[][] values = series.computeIfAbsent(row.endpoint(), key -> new long[2][hours]);
-            values[0][hour] += row.requests();
-            values[1][hour] += row.durationSumMs();
+            int bin = (int) (Duration.between(from, row.hourStart()).toHours() / binHours);
+            if (bin < 0 || bin >= binCount) continue;
+            long[][] values = series.computeIfAbsent(row.endpoint(), key -> new long[2][binCount]);
+            values[0][bin] += row.requests();
+            values[1][bin] += row.durationSumMs();
         }
         return series;
     }

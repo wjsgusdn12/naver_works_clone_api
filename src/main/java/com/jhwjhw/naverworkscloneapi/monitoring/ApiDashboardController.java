@@ -14,7 +14,7 @@ public class ApiDashboardController {
 
     private final ApiDashboardService service;
 
-    // range: HOUR(이번 시간)·DAY(오늘)·WEEK(이번 주)·MONTH(이번 달). 화면이 고른 탭 하나만 계산해 보냄.
+    // range: HOUR(최근 60분)·DAY(최근 24시간)·WEEK(최근 7일)·MONTH(최근 30일). 화면이 고른 탭 하나만 계산해 보냄.
     @GetMapping(PATH)
     public ApiResponse<ApiDashboardResponse> dashboard(
             @RequestParam(defaultValue = "DAY") ApiDashboardService.Range range) {

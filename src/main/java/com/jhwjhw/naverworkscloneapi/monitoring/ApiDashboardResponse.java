@@ -5,7 +5,7 @@ import java.util.List;
 
 // 홈 화면 API 대시보드 응답. 화면이 고른 기간(range) 하나만 담음. 기간은 달력 기준(zone 시간대).
 // mode: SHARED(서버 목록 통합, Redis) / LOCAL(서버 목록은 이 서버만, 로컬 개발). 요청 집계는 항상 DB 기준.
-// trend: HOUR 이번 시간 1분×60, DAY 오늘 5분×288, WEEK 이번 주(일~토) 1시간×168, MONTH 이번 달 1시간×말일×24
+// trend: HOUR 최근 60분 1분×60, DAY 최근 24시간 5분×288, WEEK 최근 7일 1시간×168, MONTH 최근 30일 1시간×720
 public record ApiDashboardResponse(Instant generatedAt, String zone, String mode, String database,
         List<Server> servers, String range, Summary summary, List<TrendPoint> trend, Ranking ranking) {
 

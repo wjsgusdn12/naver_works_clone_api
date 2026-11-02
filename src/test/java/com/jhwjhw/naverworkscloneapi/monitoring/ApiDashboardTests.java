@@ -108,13 +108,14 @@ class ApiDashboardTests {
         assertThat(hour.ranking().bins()).hasSize(ApiDashboardService.HOUR_MINUTES);
         assertThat(hour.servers()).anyMatch(ApiDashboardResponse.Server::current);
 
-        // 오늘: 0시부터 5분 칸 288개, 대시보드 자신의 조회는 순위에서 빠짐.
+        // 최근 24시간: 지금 5분 칸까지 5분 칸 288개, 대시보드 자신의 조회는 순위에서 빠짐.
         ApiDashboardResponse day = dashboardService.dashboard(ApiDashboardService.Range.DAY);
         assertThat(day.trend()).hasSize(ApiDashboardService.DAY_BUCKETS);
-        assertThat(day.trend().getFirst().startAt().atZone(seoul).getHour()).isZero();
-        java.time.ZonedDateTime dayLast = day.trend().getLast().startAt().atZone(seoul);
-        assertThat(dayLast.getHour()).isEqualTo(23);
-        assertThat(dayLast.getMinute()).isEqualTo(55);
+        assertThat(java.time.Duration.between(day.trend().getFirst().startAt(), day.trend().getLast().startAt()))
+                .isEqualTo(java.time.Duration.ofHours(24).minusMinutes(5));
+        assertThat(day.trend().getLast().startAt()).isBeforeOrEqualTo(day.generatedAt());
+        assertThat(java.time.Duration.between(day.trend().getLast().startAt(), day.generatedAt()))
+                .isLessThan(java.time.Duration.ofMinutes(5));
         assertThat(day.trend().stream().mapToLong(ApiDashboardResponse.TrendPoint::requests).sum())
                 .isEqualTo(day.summary().requests());
         assertThat(day.ranking().top()).anySatisfy(stat -> {
@@ -125,15 +126,14 @@ class ApiDashboardTests {
         assertThat(day.ranking().bins()).hasSize(ApiDashboardService.DAY_BUCKETS);
         assertThat(day.ranking().top().getFirst().trendRequests()).hasSize(ApiDashboardService.DAY_BUCKETS);
 
-        // 이번 주: 일요일 0시~토요일 23시 1시간 칸 168개, 순위 추이선은 하루 7칸.
+        // 최근 7일: 지금 시간까지 1시간 칸 168개, 순위 추이선은 24시간씩 7칸.
         ApiDashboardResponse week = dashboardService.dashboard(ApiDashboardService.Range.WEEK);
         assertThat(week.trend()).hasSize(ApiDashboardService.WEEK_HOURS);
-        java.time.ZonedDateTime weekFirst = week.trend().getFirst().startAt().atZone(seoul);
-        assertThat(weekFirst.getDayOfWeek()).isEqualTo(java.time.DayOfWeek.SUNDAY);
-        assertThat(weekFirst.getHour()).isZero();
-        java.time.ZonedDateTime weekLast = week.trend().getLast().startAt().atZone(seoul);
-        assertThat(weekLast.getDayOfWeek()).isEqualTo(java.time.DayOfWeek.SATURDAY);
-        assertThat(weekLast.getHour()).isEqualTo(23);
+        assertThat(week.trend().getLast().startAt()).isEqualTo(ApiMetricsRecorder.hourOf(week.generatedAt()));
+        assertThat(java.time.Duration.between(week.trend().getFirst().startAt(), week.trend().getLast().startAt()))
+                .isEqualTo(java.time.Duration.ofHours(ApiDashboardService.WEEK_HOURS - 1));
+        assertThat(week.trend().stream().mapToLong(ApiDashboardResponse.TrendPoint::requests).sum())
+                .isEqualTo(week.summary().requests());
         assertThat(week.summary().requests()).isGreaterThanOrEqualTo(hour.summary().requests());
         assertThat(week.ranking().bins()).hasSize(7);
         assertThat(week.ranking().top()).anySatisfy(stat -> {
@@ -142,13 +142,10 @@ class ApiDashboardTests {
             assertThat(stat.trendRequests().stream().mapToLong(Long::longValue).sum()).isEqualTo(stat.requests());
         });
 
-        // 이번 달: 1일 0시~말일 23시 1시간 칸, 점들을 더하면 이번 달 합계.
+        // 최근 30일: 지금 시간까지 1시간 칸 720개, 점들을 더하면 30일 합계.
         ApiDashboardResponse month = dashboardService.dashboard(ApiDashboardService.Range.MONTH);
-        java.time.ZonedDateTime monthFirst = month.trend().getFirst().startAt().atZone(seoul);
-        assertThat(monthFirst.getDayOfMonth()).isEqualTo(1);
-        assertThat(monthFirst.getHour()).isZero();
-        assertThat(month.trend()).hasSize(monthFirst.toLocalDate().lengthOfMonth() * 24);
-        assertThat(month.trend().getLast().startAt().atZone(seoul).getHour()).isEqualTo(23);
+        assertThat(month.trend()).hasSize(ApiDashboardService.MONTH_HOURS);
+        assertThat(month.trend().getLast().startAt()).isEqualTo(ApiMetricsRecorder.hourOf(month.generatedAt()));
         assertThat(month.trend().stream().mapToLong(ApiDashboardResponse.TrendPoint::requests).sum())
                 .isEqualTo(month.summary().requests());
         assertThat(month.ranking().bins()).hasSize(month.trend().size());
@@ -214,21 +211,27 @@ class ApiDashboardTests {
         assertThat(bucketRepository.read(FIVE, reused, reused).get(reused).getCount()).isEqualTo(1);
     }
 
-    // 5분 칸이 생기기 전(또는 비어 있는) 시간도 1시간 요약(DB)으로 채워 오늘 숫자·그래프·순위에서 빠지지 않음.
+    // 그래프에서 startAt이 at인 칸의 번호(없으면 -1)
+    private static int indexOf(ApiDashboardResponse dashboard, Instant at) {
+        for (int index = 0; index < dashboard.trend().size(); index++) {
+            if (dashboard.trend().get(index).startAt().equals(at)) return index;
+        }
+        return -1;
+    }
+
+    // 5분 칸이 생기기 전(또는 비어 있는) 시간도 1시간 요약(DB)으로 채워 최근 24시간 숫자·그래프·순위에서 빠지지 않음.
     @Test
-    void todayFillsHoursWithoutFineRecordsFromHourlySummary() {
-        java.time.ZoneId seoul = java.time.ZoneId.of("Asia/Seoul");
-        java.time.ZonedDateTime local = Instant.now().atZone(seoul);
-        // 지금 시각과 겹치지 않는 오늘의 한 시간(실제 요청은 지금 시간에만 쌓임)
-        int hourIndex = (local.getHour() + 12) % 24;
-        Instant hour = local.toLocalDate().atStartOfDay(seoul).toInstant().plusSeconds(hourIndex * 3600L);
+    void last24HoursFillsHoursWithoutFineRecordsFromHourlySummary() {
+        // 지금과 겹치지 않는 12시간 전의 한 시간(실제 요청은 지금 시간에만 쌓임)
+        Instant hour = ApiMetricsRecorder.hourOf(Instant.now()).minusSeconds(12 * 3600L);
         MetricsBucket past = new MetricsBucket();
         for (int i = 0; i < 7; i++) past.record("GET /api/v1/pastOnly", 200, 40);
         hourlyRepository.addHour(hour, past);
 
         ApiDashboardResponse dashboard = dashboardService.dashboard(ApiDashboardService.Range.DAY);
         // 그 시간의 5분 칸 12개에 1시간 합계를 고르게 나눔(7건 → 앞 7칸에 1건씩), 모두 추정값 표시.
-        int first = hourIndex * 12;
+        int first = indexOf(dashboard, hour);
+        assertThat(first).isNotNegative();
         java.util.List<ApiDashboardResponse.TrendPoint> cells = dashboard.trend().subList(first, first + 12);
         assertThat(cells.getFirst().startAt()).isEqualTo(hour);
         assertThat(cells).allSatisfy(item -> {
@@ -249,6 +252,32 @@ class ApiDashboardTests {
             assertThat(stat.trendRequests().subList(first, first + 12).stream().mapToLong(Long::longValue).sum())
                     .isEqualTo(7);
         });
+    }
+
+    // 최근 24시간 창이 시간 중간에서 시작하면, 그 첫 시간의 1시간 요약은 창 안에 든 5분 칸 몫만 들어감.
+    @Test
+    void last24HoursCountsOnlyPartOfFirstHour() {
+        ApiDashboardResponse before = dashboardService.dashboard(ApiDashboardService.Range.DAY);
+        Instant windowStart = before.trend().getFirst().startAt();
+        Instant firstHour = ApiMetricsRecorder.hourOf(windowStart);
+        // 첫 시간 12칸에 1건씩 가도록 12건
+        MetricsBucket past = new MetricsBucket();
+        for (int i = 0; i < 12; i++) past.record("GET /api/v1/firstHourOnly", 200, 30);
+        hourlyRepository.addHour(firstHour, past);
+
+        ApiDashboardResponse dashboard = dashboardService.dashboard(ApiDashboardService.Range.DAY);
+        // 두 번 조회하는 사이 5분 칸이 넘어가면 창 시작도 바뀌므로 다시 계산
+        Instant start = dashboard.trend().getFirst().startAt();
+        int inside = 12 - (int) (java.time.Duration.between(ApiMetricsRecorder.hourOf(start), start).toMinutes() / 5);
+        if (ApiMetricsRecorder.hourOf(start).equals(firstHour)) {
+            // 창 안에 든 첫 시간 칸들만 1건씩, 모두 추정값
+            assertThat(dashboard.trend().subList(0, inside)).allSatisfy(item -> {
+                assertThat(item.requests()).isEqualTo(1);
+                assertThat(item.estimated()).isTrue();
+            });
+        }
+        assertThat(dashboard.trend().stream().mapToLong(ApiDashboardResponse.TrendPoint::requests).sum())
+                .isEqualTo(dashboard.summary().requests());
     }
 
     // p95: 100건 중 95번째로 빠른 요청이 들어간 구간의 위쪽 경계.
