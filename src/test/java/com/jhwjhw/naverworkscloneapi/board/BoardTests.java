@@ -178,6 +178,44 @@ class BoardTests {
                 .isInstanceOf(BoardException.class);
     }
 
+    // 리액션: 한 사람 글마다 하나, 같은 걸 다시 누르면 취소, 다른 걸 누르면 바꿈. 목록에는 남긴 사람 수.
+    @Test
+    void reactionsAreOnePerPersonAndToggleOrSwitch() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var post = write(me, free, "리액션 받을 글");
+
+        service.react(colleague.getId(), post.id(), "heart");
+        var detail = service.react(me.getId(), post.id(), "heart");
+        assertThat(detail.reactions()).singleElement().satisfies(reaction -> {
+            assertThat(reaction.emoji()).isEqualTo("heart");
+            assertThat(reaction.count()).isEqualTo(2);
+            assertThat(reaction.mine()).isTrue();
+            assertThat(reaction.names()).containsExactly("같은 팀", "나");
+        });
+
+        // 다른 이모지로 바꾸면 하트는 1, 좋아요 1
+        detail = service.react(me.getId(), post.id(), "thumbs_up");
+        assertThat(detail.reactions()).extracting(BoardResponse.Reaction::emoji, BoardResponse.Reaction::count)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("heart", 1),
+                        org.assertj.core.groups.Tuple.tuple("thumbs_up", 1));
+        assertThat(service.detail(colleague.getId(), post.id()).reactions())
+                .filteredOn(BoardResponse.Reaction::mine).extracting(BoardResponse.Reaction::emoji)
+                .containsExactly("heart");
+        assertThat(service.list(me.getId(), BoardService.View.BOARD, free, null).items())
+                .singleElement().extracting(BoardResponse.PostSummary::reactionCount).isEqualTo(2);
+
+        // 같은 이모지를 다시 누르면 취소
+        detail = service.react(me.getId(), post.id(), "thumbs_up");
+        assertThat(detail.reactions()).extracting(BoardResponse.Reaction::emoji).containsExactly("heart");
+
+        assertThatThrownBy(() -> service.react(me.getId(), post.id(), "fire"))
+                .isInstanceOf(BoardException.class).hasMessage("지원하지 않는 이모지입니다.");
+        // 볼 수 없는 글에는 리액션 불가
+        var salesPost = write(me, department(me, sales).id(), "영업팀 글");
+        assertThatThrownBy(() -> service.react(developer.getId(), salesPost.id(), "heart"))
+                .isInstanceOf(BoardException.class).hasMessage("글을 찾을 수 없습니다.");
+    }
+
     @Test
     void departmentPostsStayInsideTheDepartment() {
         var post = write(me, department(me, sales).id(), "영업팀 회의");
