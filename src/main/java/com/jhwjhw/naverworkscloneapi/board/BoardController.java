@@ -133,6 +133,14 @@ public class BoardController {
                 service.addComment(id(jwt), postId, request));
     }
 
+    // 글 리액션 누르기·바꾸기·취소. 바뀐 상세를 돌려줌.
+    @PostMapping("/post/reaction")
+    public ApiResponse<BoardResponse.PostDetail> react(@AuthenticationPrincipal Jwt jwt, @RequestParam Long postId,
+            @Valid @RequestBody BoardRequest.React request) {
+        return ApiResponse.success("BOARD_REACTION_CHANGED", "리액션을 반영했습니다.",
+                service.react(id(jwt), postId, request.emoji()));
+    }
+
     @PostMapping("/comment/delete/{commentId}")
     public ApiResponse<BoardResponse.PostDetail> deleteComment(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long commentId) {

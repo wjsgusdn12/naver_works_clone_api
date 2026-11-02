@@ -19,11 +19,11 @@ public final class BoardResponse {
     }
 
     // 목록의 글 한 줄. companyName: 그 게시판의 회사, read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지,
-    // answered: 문의하기 답변 완료.
+    // answered: 문의하기 답변 완료, reactionCount: 이모지 리액션을 남긴 사람 수.
     public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String companyName,
             String title, String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
             boolean mustRead, boolean read, int viewCount, int commentCount, boolean hasFile, boolean answered,
-            Instant deletedAt, PostStatus status, Instant publishAt) {
+            Instant deletedAt, PostStatus status, Instant publishAt, int reactionCount) {
     }
 
     // pinned: 게시판 첫 페이지에만 주는 중요 글(맨 위 고정, 검색 중이면 없음). page는 0부터.
@@ -44,12 +44,16 @@ public final class BoardResponse {
             Instant createdAt, boolean canDelete) {
     }
 
+    // 글 리액션 한 종류. mine: 내가 누른 이모지, names: 누른 사람(누른 순서)
+    public record Reaction(String emoji, int count, boolean mine, List<String> names) {
+    }
+
     public record PostDetail(Long id, BoardItem board, String title, String content, Long authorMembershipId,
             String authorName, String authorDepartmentName, Instant createdAt, Instant updatedAt, boolean important,
             boolean mustRead, int viewCount, Instant answeredAt, Instant deletedAt, long version,
             List<Attachment> attachments, List<Comment> comments, boolean canEdit, boolean canDelete,
             boolean canRestore, boolean canSeeReaders, boolean canComment, PostStatus status, Instant publishAt,
-            boolean allowComment, boolean commentNotify) {
+            boolean allowComment, boolean commentNotify, List<Reaction> reactions, boolean canReact) {
     }
 
     // companyName: 공통 게시판은 여러 회사 사람이 섞이므로 함께 보여 줌

@@ -53,6 +53,10 @@ public final class BoardRequest {
     public record CommentCreate(@NotBlank @Size(max = 1000) String content) {
     }
 
+    // 글 리액션. 같은 이모지를 다시 누르면 취소, 다른 이모지면 바꿈.
+    public record React(@NotBlank @Size(max = 40) String emoji) {
+    }
+
     // 목록에서 고른 글 읽음 처리(한 번에 100개까지)
     public record MarkRead(@NotEmpty @Size(max = 100) List<@NotNull Long> postIds) {
     }

@@ -5,17 +5,20 @@ import com.jhwjhw.naverworkscloneapi.board.domain.BoardAttachment;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardComment;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardFavorite;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
+import com.jhwjhw.naverworkscloneapi.board.domain.BoardPostReaction;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPostRead;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
 import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardCommentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardFavoriteRepository;
+import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostReactionRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostReadRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardRepository;
 import com.jhwjhw.naverworkscloneapi.chat.ChatAttachmentStore;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatAttachmentKind;
+import com.jhwjhw.naverworkscloneapi.chat.domain.ChatMessageReaction;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Company;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Department;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Membership;
@@ -73,6 +76,7 @@ public class BoardService {
     private final BoardPostRepository postRepository;
     private final BoardPostReadRepository readRepository;
     private final BoardCommentRepository commentRepository;
+    private final BoardPostReactionRepository reactionRepository;
     private final BoardAttachmentRepository attachmentRepository;
     private final BoardFavoriteRepository favoriteRepository;
     private final MembershipRepository membershipRepository;
@@ -334,12 +338,14 @@ public class BoardService {
                 rows.getTotalPages(), rows.getTotalElements());
     }
 
-    // 글 줄 만들기. 읽음·첨부 여부는 페이지 전체를 쿼리 한 번씩으로 확인.
+    // 글 줄 만들기. 읽음·첨부 여부·리액션 수는 페이지 전체를 쿼리 한 번씩으로 확인.
     private List<BoardResponse.PostSummary> summaries(Viewer viewer, List<BoardPost> posts) {
         if (posts.isEmpty()) return List.of();
         List<Long> postIds = posts.stream().map(BoardPost::getId).toList();
         Set<Long> read = new HashSet<>(readRepository.findReadPostIds(viewer.id(), postIds));
         Set<Long> withFiles = new HashSet<>(attachmentRepository.findPostIdsWithFiles(postIds));
+        Map<Long, Integer> reactionCounts = reactionRepository.countByPostIds(postIds).stream()
+                .collect(Collectors.toMap(row -> (Long) row[0], row -> ((Number) row[1]).intValue()));
         return posts.stream().map(post -> new BoardResponse.PostSummary(post.getId(), post.getBoard().getId(),
                 post.getBoard().getName(), post.getBoard().getType(),
                 post.getBoard().getType().common() ? "" : post.getBoard().getCompany().getName(),
@@ -347,7 +353,8 @@ public class BoardService {
                 post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
                 post.isImportant(), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
-                post.getDeletedAt(), post.getStatus(), post.getPublishAt())).toList();
+                post.getDeletedAt(), post.getStatus(), post.getPublishAt(),
+                reactionCounts.getOrDefault(post.getId(), 0))).toList();
     }
 
     private static String preview(String text) {
@@ -394,6 +401,7 @@ public class BoardService {
         boolean favorite = favoriteRepository.findByMembershipIdAndBoardId(viewer.id(), post.getBoard().getId())
                 .isPresent();
         Department department = post.getAuthor().getDepartment();
+        boolean live = !post.isDeleted() && post.isPublished();
         return new BoardResponse.PostDetail(post.getId(), boardItem(viewer, post.getBoard(), favorite),
                 post.getTitle(), post.getContentJson(), post.getAuthor().getId(),
                 post.getAuthor().getUserAccount().getDisplayName(), department == null ? null : department.getName(),
@@ -402,7 +410,39 @@ public class BoardService {
                 author && !post.isDeleted(), !post.isDeleted() && (author || viewer.admin()),
                 canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
                 !post.isDeleted() && post.isPublished() && post.isAllowComment(), post.getStatus(), post.getPublishAt(),
-                post.isAllowComment(), post.isCommentNotify());
+                post.isAllowComment(), post.isCommentNotify(), reactions(viewer, postId), live);
+    }
+
+    // 리액션을 이모지별로 묶음(먼저 눌린 이모지가 앞). 누른 사람 이름은 누른 순서.
+    private List<BoardResponse.Reaction> reactions(Viewer viewer, Long postId) {
+        Map<String, List<BoardPostReaction>> byEmoji = reactionRepository.findWithMemberByPostId(postId).stream()
+                .collect(Collectors.groupingBy(BoardPostReaction::getEmoji, java.util.LinkedHashMap::new,
+                        Collectors.toList()));
+        return byEmoji.entrySet().stream().map(entry -> new BoardResponse.Reaction(entry.getKey(),
+                entry.getValue().size(),
+                entry.getValue().stream().anyMatch(reaction -> reaction.getMembership().getId().equals(viewer.id())),
+                entry.getValue().stream().map(reaction -> reaction.getMembership().getUserAccount().getDisplayName())
+                        .toList()))
+                .toList();
+    }
+
+    // 글 리액션: 처음이면 남기고, 같은 이모지를 다시 누르면 취소, 다른 이모지면 바꿈(한 사람 글마다 하나).
+    @Transactional
+    public BoardResponse.PostDetail react(Long membershipId, Long postId, String emoji) {
+        if (!ChatMessageReaction.ALLOWED_EMOJIS.contains(emoji)) {
+            throw new BoardException("BOARD_REACTION_INVALID", "지원하지 않는 이모지입니다.");
+        }
+        Viewer viewer = viewer(membershipId);
+        BoardPost post = readablePost(viewer, postId);
+        if (post.isDeleted() || !post.isPublished()) {
+            throw new BoardException("BOARD_REACTION_UNAVAILABLE", "등록된 글에만 리액션을 남길 수 있습니다.");
+        }
+        reactionRepository.findByPostIdAndMembershipId(postId, viewer.id()).ifPresentOrElse(reaction -> {
+            if (reaction.getEmoji().equals(emoji)) reactionRepository.delete(reaction);
+            else reaction.changeEmoji(emoji);
+        }, () -> reactionRepository.save(new BoardPostReaction(post, viewer.me(), emoji)));
+        reactionRepository.flush();
+        return detail(viewer, post);
     }
 
     // 글을 처음 열면 읽음 기록과 조회수 1. 이미 읽었으면 아무 일 없음.
