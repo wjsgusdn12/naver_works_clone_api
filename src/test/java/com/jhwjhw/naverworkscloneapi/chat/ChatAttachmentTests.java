@@ -9,6 +9,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.hamcrest.Matchers.startsWith;
 
+import com.jhwjhw.naverworkscloneapi.board.BoardRequest;
+import com.jhwjhw.naverworkscloneapi.board.BoardService;
+import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import com.jhwjhw.naverworkscloneapi.board.repository.BoardAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoom;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomMember;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatRoomType;
@@ -74,6 +78,8 @@ class ChatAttachmentTests {
     @Autowired private ChatMessageAttachmentRepository attachmentRepository;
     @Autowired private FileStorage storage;
     @Autowired private ChatLinkPreviewRepository linkPreviewRepository;
+    @Autowired private BoardAttachmentRepository boardAttachmentRepository;
+    @Autowired private BoardService boardService;
     @Autowired private TransactionTemplate transaction;
 
     private Membership author;
@@ -390,7 +396,7 @@ class ChatAttachmentTests {
 
         // 31일 뒤의 청소. 고아 파일 정리는 이 테스트 대상이 아니라 아주 길게 잡아 건드리지 않음.
         Clock later = Clock.offset(Clock.systemUTC(), Duration.ofDays(31));
-        ChatAttachmentCleanup cleanup = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, storage, transaction, later,
+        ChatAttachmentCleanup cleanup = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, boardAttachmentRepository, storage, transaction, later,
                 Duration.ofDays(30), Duration.ofDays(3650));
         ChatAttachmentCleanup.Result first = cleanup.cleanup();
         assertThat(first.purgedAttachments()).isEqualTo(1);
@@ -427,15 +433,41 @@ class ChatAttachmentTests {
         String orphan = isolated.save(new ByteArrayInputStream("orphan".getBytes(StandardCharsets.UTF_8)));
 
         // 방금 만든 파일은 고아여도 기다림(올라가는 중일 수 있음)
-        ChatAttachmentCleanup now = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, isolated, transaction,
+        ChatAttachmentCleanup now = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, boardAttachmentRepository, isolated, transaction,
                 Clock.systemUTC(), Duration.ofDays(30), Duration.ofHours(24));
         assertThat(now.cleanup().orphanFiles()).isZero();
 
-        ChatAttachmentCleanup dayLater = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, isolated, transaction,
+        ChatAttachmentCleanup dayLater = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository, boardAttachmentRepository, isolated, transaction,
                 Clock.offset(Clock.systemUTC(), Duration.ofHours(25)),
                 Duration.ofDays(30), Duration.ofHours(24));
         assertThat(dayLater.cleanup().orphanFiles()).isEqualTo(1);
         assertThat(isolated.load(orphan)).isNull();
         assertThat(isolated.load(referenced)).isNotNull();
+    }
+    // 게시판 첨부도 같은 저장소를 씀. 글에 붙은 첨부 파일은 남기고, 올리기만 하고 글에 안 붙인 것은 고아로 지움.
+    @Test
+    void cleanupKeepsBoardAttachmentsThatBelongToPosts(@TempDir Path folder) throws IOException {
+        LocalFileStorage isolated = new LocalFileStorage(folder.toString());
+        boardService.ensureBoards(author.getId());
+        Long freeBoard = boardService.sidebar(author.getId()).boards().stream()
+                .filter(board -> board.type() == BoardType.FREE).findFirst().orElseThrow().id();
+        var attached = boardService.upload(author.getId(), png("board-keep.png"));
+        var unattached = boardService.upload(author.getId(), png("board-drop.png"));
+        boardService.create(author.getId(), new BoardRequest.PostCreate(freeBoard, "첨부 글", null, false, false,
+                List.of(attached.id())));
+        String keepKey = boardAttachmentRepository.findById(attached.id()).orElseThrow().getStorageKey();
+        String dropKey = boardAttachmentRepository.findById(unattached.id()).orElseThrow().getStorageKey();
+        for (String key : List.of(keepKey, dropKey)) {
+            Path file = folder.resolve(key);
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, "board");
+        }
+
+        ChatAttachmentCleanup dayLater = new ChatAttachmentCleanup(attachmentRepository, linkPreviewRepository,
+                boardAttachmentRepository, isolated, transaction, Clock.offset(Clock.systemUTC(), Duration.ofHours(25)),
+                Duration.ofDays(30), Duration.ofHours(24));
+        dayLater.cleanup();
+        assertThat(isolated.load(keepKey)).isNotNull();
+        assertThat(isolated.load(dropKey)).isNull();
     }
 }
