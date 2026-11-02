@@ -56,13 +56,16 @@ public class BoardController {
 
     // 글 목록. view: LATEST(최신글)·MUST_READ(필독)·IMPORTANT(중요)·MINE(내 게시글)·BOARD(게시판, boardId 필요)·
     // TYPE(공지·자유·문의 같은 종류 전체, type 필요)·TRASH(휴지통). page는 0부터, keyword는 제목·본문·글쓴이 검색.
+    // size: 한 쪽 글 수(10~50, 10 단위), sort: CREATED(등록순)·ACTIVITY(글/댓글 업데이트 순), unread: 안 읽은 글만.
     @GetMapping("/post/list")
     public ApiResponse<BoardResponse.PostPage> list(@AuthenticationPrincipal Jwt jwt,
             @RequestParam BoardService.View view, @RequestParam(required = false) Long boardId,
             @RequestParam(required = false) BoardType type, @RequestParam(defaultValue = "0") int page,
-            @RequestParam(required = false) String keyword) {
-        return ApiResponse.success("BOARD_POST_LIST_FOUND", "글 목록을 조회했습니다.",
-                service.list(id(jwt), view, boardId, type, page, keyword));
+            @RequestParam(required = false) String keyword, @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "CREATED") BoardService.Sort sort,
+            @RequestParam(defaultValue = "false") boolean unread) {
+        return ApiResponse.success("BOARD_POST_LIST_FOUND", "글 목록을 조회했습니다.", service.list(id(jwt), view,
+                boardId, type, page, keyword, new BoardService.ListOptions(size, sort, unread)));
     }
 
     // 글 보기. 처음 여는 것이면 읽음 기록·조회수 1.

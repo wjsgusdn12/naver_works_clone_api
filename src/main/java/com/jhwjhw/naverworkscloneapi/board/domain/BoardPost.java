@@ -65,6 +65,9 @@ public class BoardPost {
 
     private Instant updatedAt;
 
+    // 글을 쓰거나 고치거나 댓글이 달린 마지막 시각("글/댓글 업데이트 순" 정렬). V34 이전 글은 null.
+    private Instant activityAt;
+
     @Version
     private long version;
 
@@ -81,6 +84,7 @@ public class BoardPost {
         this.important = important;
         this.mustRead = mustRead;
         this.createdAt = Instant.now();
+        this.activityAt = this.createdAt;
     }
 
     public void edit(String title, String contentJson, String contentText, boolean important, boolean mustRead) {
@@ -90,6 +94,7 @@ public class BoardPost {
         this.important = important;
         this.mustRead = mustRead;
         this.updatedAt = Instant.now();
+        this.activityAt = this.updatedAt;
     }
 
     public void moveToTrash(Membership by, Instant at) {

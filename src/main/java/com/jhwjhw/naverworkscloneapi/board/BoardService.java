@@ -193,13 +193,13 @@ public class BoardService {
         List<Long> inquiryBoards = boards.stream().filter(board -> board.getType() == BoardType.INQUIRY)
                 .map(Board::getId).toList();
         return new BoardResponse.Home(
-                summaries(viewer, find(viewer, ids(boards), false, false, false, false, Search.NONE, 0, HOME_SIZE).getContent()),
-                summaries(viewer, find(viewer, inquiryBoards, false, false, false, false, Search.NONE, 0, HOME_SIZE).getContent()),
+                summaries(viewer, find(viewer, ids(boards), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0, HOME_SIZE).getContent()),
+                summaries(viewer, find(viewer, inquiryBoards, false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0, HOME_SIZE).getContent()),
                 notice == null ? List.of()
-                        : summaries(viewer, find(viewer, List.of(notice.getId()), false, false, false, false, Search.NONE, 0,
+                        : summaries(viewer, find(viewer, List.of(notice.getId()), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
                                 HOME_SIZE).getContent()),
                 free == null ? List.of()
-                        : summaries(viewer, find(viewer, List.of(free.getId()), false, false, false, false, Search.NONE, 0,
+                        : summaries(viewer, find(viewer, List.of(free.getId()), false, false, false, false, Search.NONE, ListOptions.DEFAULT, 0,
                                 HOME_SIZE).getContent()),
                 notice == null ? null : notice.getId(), free == null ? null : free.getId(),
                 inquiry == null ? null : inquiry.getId());
@@ -215,12 +215,35 @@ public class BoardService {
         return list(membershipId, view, boardId, type, page, null);
     }
 
-    // page: 0부터. keyword가 있으면 제목·본문·글쓴이 이름으로 걸러 내고, 중요 글 고정 없이 한 목록으로 보여 줌.
     @Transactional(readOnly = true)
     public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
             String keyword) {
+        return list(membershipId, view, boardId, type, page, keyword, ListOptions.DEFAULT);
+    }
+
+    // 목록 정렬: CREATED(글 등록순), ACTIVITY(글/댓글 업데이트 순). 둘 다 최신이 위.
+    public enum Sort {
+        CREATED, ACTIVITY
+    }
+
+    // 목록 보기 설정. size: 한 쪽 글 수(10·20·30·40·50 중 하나, 아니면 20), unreadOnly: 안 읽은 글만.
+    // 휴지통에는 쪽 크기만 적용.
+    public record ListOptions(int size, Sort sort, boolean unreadOnly) {
+        public static final ListOptions DEFAULT = new ListOptions(PAGE_SIZE, Sort.CREATED, false);
+
+        public ListOptions {
+            if (size < 10 || size > 50 || size % 10 != 0) size = PAGE_SIZE;
+            if (sort == null) sort = Sort.CREATED;
+        }
+    }
+
+    // page: 0부터. keyword가 있으면 제목·본문·글쓴이 이름으로 걸러 내고, 중요 글 고정 없이 한 목록으로 보여 줌.
+    @Transactional(readOnly = true)
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
+            String keyword, ListOptions options) {
         Viewer viewer = viewer(membershipId);
         int pageIndex = page == null ? 0 : Math.max(page, 0);
+        int size = options.size();
         String trimmed = keyword == null ? "" : keyword.strip();
         if (trimmed.length() > KEYWORD_MAX) trimmed = trimmed.substring(0, KEYWORD_MAX);
         Search search = new Search(!trimmed.isEmpty(), likePattern(trimmed));
@@ -237,20 +260,21 @@ public class BoardService {
             // 검색하지 않을 때 첫 페이지에만 중요 글을 맨 위 고정으로 따로 주고, 아래 목록에서는 뺌.
             boolean pin = !search.on();
             List<BoardResponse.PostSummary> pinned = pin && pageIndex == 0
-                    ? summaries(viewer, find(viewer, scope, false, true, false, false, Search.NONE, 0, PINNED_MAX)
-                            .getContent())
+                    ? summaries(viewer, find(viewer, scope, false, true, false, false, Search.NONE, options, 0,
+                            PINNED_MAX).getContent())
                     : List.of();
-            return page(viewer, pinned, find(viewer, scope, false, false, pin, false, search, pageIndex, PAGE_SIZE));
+            return page(viewer, pinned, find(viewer, scope, false, false, pin, false, search, options, pageIndex,
+                    size));
         }
         List<Long> boardIds = ids(visibleBoards(viewer));
         if (view == View.TRASH) {
-            Page<BoardPost> rows = boardIds.isEmpty() ? Page.empty(PageRequest.of(pageIndex, PAGE_SIZE))
+            Page<BoardPost> rows = boardIds.isEmpty() ? Page.empty(PageRequest.of(pageIndex, size))
                     : postRepository.findTrash(boardIds, viewer.id(), viewer.admin(), Instant.now().minus(TRASH_KEEP),
-                            search.on(), search.pattern(), PageRequest.of(pageIndex, PAGE_SIZE));
+                            search.on(), search.pattern(), PageRequest.of(pageIndex, size));
             return page(viewer, List.of(), rows);
         }
         return page(viewer, List.of(), find(viewer, boardIds, view == View.MUST_READ, view == View.IMPORTANT, false,
-                view == View.MINE, search, pageIndex, PAGE_SIZE));
+                view == View.MINE, search, options, pageIndex, size));
     }
 
     // on이 false면 검색하지 않음. pattern은 like에 바로 넣는 소문자 "%검색어%"(%·_·\는 글자 그대로 찾게 이스케이프).
@@ -264,10 +288,11 @@ public class BoardService {
     }
 
     private Page<BoardPost> find(Viewer viewer, List<Long> boardIds, boolean mustRead, boolean important,
-            boolean excludeImportant, boolean mine, Search search, int page, int size) {
+            boolean excludeImportant, boolean mine, Search search, ListOptions options, int page, int size) {
         if (boardIds.isEmpty()) return Page.empty(PageRequest.of(page, size));
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, mustRead, important,
-                excludeImportant, mine, search.on(), search.pattern(), PageRequest.of(page, size));
+                excludeImportant, mine, options.unreadOnly(), search.on(), search.pattern(),
+                options.sort() == Sort.ACTIVITY, PageRequest.of(page, size));
     }
 
     private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows) {
@@ -453,6 +478,7 @@ public class BoardService {
         commentRepository.save(new BoardComment(post, viewer.me(), text));
         boolean answer = post.getBoard().getType() == BoardType.INQUIRY && viewer.admin();
         postRepository.changeCommentCount(postId, 1);
+        postRepository.touchActivity(postId, Instant.now());
         if (answer) postRepository.markAnswered(postId, Instant.now());
         return detail(membershipId, postId);
     }

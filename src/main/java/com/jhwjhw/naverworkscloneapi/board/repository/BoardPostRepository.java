@@ -23,19 +23,25 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             + "and (:mustRead = false or p.mustRead = true) "
             + "and (:important = false or p.important = true) "
             + "and (:excludeImportant = false or p.important = false) "
-            + "and (:mine = false or a.id = :me) " + SEARCH;
+            + "and (:mine = false or a.id = :me) "
+            + "and (:unread = false or not exists (select r.id from BoardPostRead r "
+            + "where r.post = p and r.membership.id = :me)) " + SEARCH;
 
-    // 글 목록(최신순, 쪽 번호). 볼 수 있는 게시판(boardIds) 안에서만 찾고,
-    // 관리자가 아니면 남의 문의하기 글(hiddenType)은 뺌. 필터는 false면 적용하지 않음.
+    // 글 목록(쪽 번호). 볼 수 있는 게시판(boardIds) 안에서만 찾고,
+    // 관리자가 아니면 남의 문의하기 글(hiddenType)은 뺌. 필터는 false면 적용하지 않음(unread: 내가 안 읽은 글만).
+    // 정렬: activity면 글/댓글 업데이트 순(이전 글은 등록 시각으로), 아니면 등록순. 둘 다 최신이 위.
     @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
-            + "join fetch a.userAccount u " + PAGE_WHERE + "order by p.id desc",
+            + "join fetch a.userAccount u " + PAGE_WHERE
+            + "order by case when :activity = true then coalesce(p.activityAt, p.createdAt) else p.createdAt end "
+            + "desc, p.id desc",
             countQuery = "select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u "
                     + PAGE_WHERE)
     Page<BoardPost> findPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType,
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
             @Param("excludeImportant") boolean excludeImportant, @Param("mine") boolean mine,
-            @Param("search") boolean search, @Param("keyword") String keyword, Pageable pageable);
+            @Param("unread") boolean unread, @Param("search") boolean search, @Param("keyword") String keyword,
+            @Param("activity") boolean activity, Pageable pageable);
 
     String TRASH_WHERE = "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since "
             + "and (:admin = true or p.deletedBy.id = :me) " + SEARCH;
@@ -63,6 +69,11 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     @Query("update BoardPost p set p.commentCount = p.commentCount + :delta "
             + "where p.id = :id and p.commentCount + :delta >= 0")
     void changeCommentCount(@Param("id") Long id, @Param("delta") int delta);
+
+    // 댓글이 달린 시각을 마지막 활동으로. 댓글 수와 같은 이유로 version을 올리지 않음.
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update BoardPost p set p.activityAt = :at where p.id = :id")
+    void touchActivity(@Param("id") Long id, @Param("at") Instant at);
 
     // 문의하기 글에 관리자가 처음 답변한 시각. 이미 있으면 그대로.
     @Modifying(clearAutomatically = true, flushAutomatically = true)

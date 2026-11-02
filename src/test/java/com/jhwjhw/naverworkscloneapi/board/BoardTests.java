@@ -272,6 +272,38 @@ class BoardTests {
     }
 
     @Test
+    void listCanChangePageSizeSortByActivityAndShowOnlyUnread() throws InterruptedException {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var old = write(me, free, "오래된 글");
+        Thread.sleep(5);
+        var recent = write(me, free, "새 글");
+        Thread.sleep(5);
+        // 오래된 글에 댓글이 달리면 업데이트 순에서는 맨 위
+        service.addComment(colleague.getId(), old.id(), new BoardRequest.CommentCreate("댓글"));
+
+        var created = new BoardService.ListOptions(20, BoardService.Sort.CREATED, false);
+        var activity = new BoardService.ListOptions(20, BoardService.Sort.ACTIVITY, false);
+        assertThat(ids(service.list(developer.getId(), BoardService.View.BOARD, free, null, 0, null, created)))
+                .containsExactly(recent.id(), old.id());
+        assertThat(ids(service.list(developer.getId(), BoardService.View.BOARD, free, null, 0, null, activity)))
+                .containsExactly(old.id(), recent.id());
+
+        // 안 읽은 글만
+        service.markRead(developer.getId(), recent.id());
+        var unread = new BoardService.ListOptions(20, BoardService.Sort.CREATED, true);
+        assertThat(ids(service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, null, unread)))
+                .containsExactly(old.id());
+
+        // 쪽 크기: 10 단위만, 아니면 20
+        for (int index = 0; index < 10; index++) write(me, free, "채우기 " + index);
+        var ten = new BoardService.ListOptions(10, BoardService.Sort.CREATED, false);
+        var page = service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, null, ten);
+        assertThat(page.items()).hasSize(10);
+        assertThat(page.totalPages()).isEqualTo(2);
+        assertThat(new BoardService.ListOptions(15, null, false).size()).isEqualTo(BoardService.PAGE_SIZE);
+    }
+
+    @Test
     void searchMatchesTitleBodyOrAuthorAndPagesAreNumbered() {
         Long free = board(me, BoardType.FREE, company.getName()).id();
         var important = service.create(me.getId(),
