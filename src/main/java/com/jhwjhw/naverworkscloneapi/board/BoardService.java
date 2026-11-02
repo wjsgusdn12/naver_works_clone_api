@@ -7,6 +7,7 @@ import com.jhwjhw.naverworkscloneapi.board.domain.BoardFavorite;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPostRead;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardCommentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardFavoriteRepository;
@@ -58,6 +59,7 @@ public class BoardService {
     static final int HOME_SIZE = 10;
     static final int PINNED_MAX = 20;
     static final int KEYWORD_MAX = 100;
+    static final Duration SCHEDULE_MAX = Duration.ofDays(90);
     static final List<BoardType> COMMON_TYPES = List.of(BoardType.NOTICE, BoardType.FREE, BoardType.INQUIRY);
     static final Duration TRASH_KEEP = Duration.ofDays(30);
     static final int MAX_ATTACHMENTS = 30;
@@ -79,7 +81,8 @@ public class BoardService {
 
     // 목록 종류(사이드바 메뉴). TYPE: 볼 수 있는 게시판 중 한 종류(공지·자유·문의) 전체를 한 목록으로(관리자는 모든 회사).
     public enum View {
-        LATEST, MUST_READ, IMPORTANT, MINE, BOARD, TYPE, TRASH
+        // DRAFTS(임시저장함)·SCHEDULED(예약함): 내 글 중 그 상태만
+        LATEST, MUST_READ, IMPORTANT, MINE, BOARD, TYPE, TRASH, DRAFTS, SCHEDULED
     }
 
     // 요청한 사람과 관리자 여부
@@ -273,6 +276,10 @@ public class BoardService {
             return page(viewer, pinned, find(viewer, scope, false, false, pin, false, search, options, pageIndex,
                     size));
         }
+        if (view == View.DRAFTS || view == View.SCHEDULED) {
+            PostStatus status = view == View.DRAFTS ? PostStatus.DRAFT : PostStatus.SCHEDULED;
+            return page(viewer, List.of(), postRepository.findMine(viewer.id(), status, PageRequest.of(pageIndex, size)));
+        }
         List<Long> boardIds = ids(visibleBoards(viewer));
         if (view == View.TRASH) {
             Page<BoardPost> rows = boardIds.isEmpty() ? Page.empty(PageRequest.of(pageIndex, size))
@@ -320,7 +327,7 @@ public class BoardService {
                 post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
                 post.isImportant(), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
-                post.getDeletedAt())).toList();
+                post.getDeletedAt(), post.getStatus(), post.getPublishAt())).toList();
     }
 
     private static String preview(String text) {
@@ -353,7 +360,8 @@ public class BoardService {
                 post.getCreatedAt(), post.getUpdatedAt(), post.isImportant(), post.isMustRead(), post.getViewCount(),
                 post.getAnsweredAt(), post.getDeletedAt(), post.getVersion(), attachments, comments,
                 author && !post.isDeleted(), !post.isDeleted() && (author || viewer.admin()),
-                canRestore(viewer, post), post.isMustRead() && (author || viewer.admin()), !post.isDeleted());
+                canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
+                !post.isDeleted() && post.isPublished(), post.getStatus(), post.getPublishAt());
     }
 
     // 글을 처음 열면 읽음 기록과 조회수 1. 이미 읽었으면 아무 일 없음.
@@ -362,7 +370,8 @@ public class BoardService {
     public void markRead(Long membershipId, Long postId) {
         Viewer viewer = viewer(membershipId);
         BoardPost post = readablePost(viewer, postId);
-        if (post.isDeleted() || readRepository.existsByPostIdAndMembershipId(postId, viewer.id())) return;
+        if (post.isDeleted() || !post.isPublished()
+                || readRepository.existsByPostIdAndMembershipId(postId, viewer.id())) return;
         readRepository.saveAndFlush(new BoardPostRead(post, viewer.me()));
         postRepository.increaseViewCount(postId);
     }
@@ -376,7 +385,8 @@ public class BoardService {
         List<BoardPost> posts = new LinkedHashSet<>(postIds).stream().map(id -> readablePost(viewer, id)).toList();
         int marked = 0;
         for (BoardPost post : posts) {
-            if (post.isDeleted() || readRepository.existsByPostIdAndMembershipId(post.getId(), viewer.id())) continue;
+            if (post.isDeleted() || !post.isPublished()
+                    || readRepository.existsByPostIdAndMembershipId(post.getId(), viewer.id())) continue;
             readRepository.saveAndFlush(new BoardPostRead(post, viewer.me()));
             postRepository.increaseViewCount(post.getId());
             marked++;
@@ -393,12 +403,17 @@ public class BoardService {
         }
         // 공통 게시판 글은 그 종류의 대표 게시판(처음 만든 것)에 모음
         if (board.getType().common()) board = primary(visibleBoards(viewer), board.getType());
+        BoardRequest.SaveMode mode = modeOf(request.mode());
+        Instant publishAt = scheduleTime(mode, request.publishAt());
         BoardContent.Sanitized body = content.sanitize(request.content());
         boolean flags = board.getType() != BoardType.INQUIRY;
-        BoardPost post = postRepository.save(new BoardPost(board, viewer.me(), title(request.title()), body.json(),
-                body.text(), flags && request.important(), flags && request.mustRead()));
+        BoardPost post = postRepository.save(new BoardPost(board, viewer.me(), title(request.title(), mode),
+                body.json(), body.text(), flags && request.important(), flags && request.mustRead()));
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
-        notifyNewPost(viewer, post);
+        if (mode == BoardRequest.SaveMode.PUBLISH) notifyNewPost(viewer, post);
+        else post.keepUnpublished(mode == BoardRequest.SaveMode.DRAFT ? PostStatus.DRAFT : PostStatus.SCHEDULED,
+                publishAt);
+        postRepository.flush();
         return detail(membershipId, post.getId());
     }
 
@@ -412,11 +427,23 @@ public class BoardService {
         if (post.getVersion() != request.expectedVersion()) {
             throw new BoardException("BOARD_POST_CONFLICT", "다른 화면에서 글이 바뀌었습니다. 새로 불러온 뒤 다시 수정해 주세요.");
         }
+        // 등록된 글은 계속 등록 상태. 임시저장·예약 글은 고르는 방식대로(바로 등록·임시저장·예약 변경).
+        BoardRequest.SaveMode mode = post.isPublished() ? BoardRequest.SaveMode.PUBLISH : modeOf(request.mode());
+        Instant publishAt = scheduleTime(mode, request.publishAt());
         BoardContent.Sanitized body = content.sanitize(request.content());
         boolean flags = post.getBoard().getType() != BoardType.INQUIRY;
-        post.edit(title(request.title()), body.json(), body.text(), flags && request.important(),
+        post.edit(title(request.title(), mode), body.json(), body.text(), flags && request.important(),
                 flags && request.mustRead());
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
+        if (!post.isPublished()) {
+            if (mode == BoardRequest.SaveMode.PUBLISH) {
+                post.publish(Instant.now());
+                notifyNewPost(viewer, post);
+            } else {
+                post.keepUnpublished(mode == BoardRequest.SaveMode.DRAFT ? PostStatus.DRAFT : PostStatus.SCHEDULED,
+                        publishAt);
+            }
+        }
         postRepository.flush();
         return detail(membershipId, postId);
     }
@@ -480,6 +507,9 @@ public class BoardService {
     public BoardResponse.PostDetail addComment(Long membershipId, Long postId, BoardRequest.CommentCreate request) {
         Viewer viewer = viewer(membershipId);
         BoardPost post = readablePost(viewer, postId);
+        if (!post.isPublished()) {
+            throw new BoardException("BOARD_POST_NOT_PUBLISHED", "등록된 글에만 댓글을 달 수 있습니다.");
+        }
         if (post.isDeleted()) {
             throw new BoardException("BOARD_POST_ALREADY_DELETED", "휴지통에 있는 글에는 댓글을 달 수 없습니다.");
         }
@@ -492,6 +522,35 @@ public class BoardService {
         if (answer) postRepository.markAnswered(postId, Instant.now());
         notifyComment(viewer, post, text, answer);
         return detail(membershipId, postId);
+    }
+
+    private static BoardRequest.SaveMode modeOf(BoardRequest.SaveMode mode) {
+        return mode == null ? BoardRequest.SaveMode.PUBLISH : mode;
+    }
+
+    // 예약이면 예약 시각 검사(1분 뒤 ~ 90일 안). 예약이 아니면 null.
+    private static Instant scheduleTime(BoardRequest.SaveMode mode, Instant publishAt) {
+        if (mode != BoardRequest.SaveMode.SCHEDULE) return null;
+        Instant now = Instant.now();
+        if (publishAt == null || publishAt.isBefore(now.plusSeconds(60)) || publishAt.isAfter(now.plus(SCHEDULE_MAX))) {
+            throw new BoardException("BOARD_SCHEDULE_INVALID", "예약 시각은 1분 뒤부터 90일 안으로 골라 주세요.");
+        }
+        return publishAt;
+    }
+
+    // 예약 시각이 지난 글을 공개하고 공지·필독·문의 알림을 보냄(BoardPublishScheduler가 1분마다 부름).
+    // 조건부 변경이라 서버가 여러 대여도 글마다 한 번만 공개·알림. 돌려주는 값은 이번에 공개한 글 수.
+    @Transactional
+    public int publishDueScheduled() {
+        Instant now = Instant.now();
+        int published = 0;
+        for (Long postId : postRepository.findDueScheduledIds(now)) {
+            if (postRepository.publishScheduled(postId, now) != 1) continue;
+            BoardPost post = postRepository.findDetailById(postId).orElseThrow();
+            notifyNewPost(new Viewer(post.getAuthor(), post.getAuthor().getRole() == Role.ADMIN), post);
+            published++;
+        }
+        return published;
     }
 
     // ---------- 알림(시스템 분류, 누르면 그 글로) ----------
@@ -697,7 +756,9 @@ public class BoardService {
         boolean inquiryHidden = board.getType() == BoardType.INQUIRY && !viewer.admin() && !isAuthor(viewer, post);
         boolean trashHidden = post.isDeleted() && !viewer.admin()
                 && !post.getDeletedBy().getId().equals(viewer.id());
-        if (!boardVisible || inquiryHidden || trashHidden) throw postNotFound();
+        // 임시저장·예약 글은 쓴 사람만(관리자도 못 봄)
+        boolean unpublishedHidden = !post.isPublished() && !isAuthor(viewer, post);
+        if (!boardVisible || inquiryHidden || trashHidden || unpublishedHidden) throw postNotFound();
         return post;
     }
 
@@ -731,8 +792,13 @@ public class BoardService {
         return boards.stream().map(Board::getId).toList();
     }
 
-    private static String title(String raw) {
+    // 임시저장은 제목을 비워 둘 수 있음(200자 제한만). 등록·예약은 1~200자.
+    private static String title(String raw, BoardRequest.SaveMode mode) {
         String title = raw == null ? "" : raw.strip();
+        if (mode == BoardRequest.SaveMode.DRAFT) {
+            if (title.length() > 200) throw new BoardException("BOARD_TITLE_INVALID", "제목은 200자까지 입력할 수 있습니다.");
+            return title;
+        }
         if (title.isEmpty() || title.length() > 200) {
             throw new BoardException("BOARD_TITLE_INVALID", "제목은 1~200자로 입력해 주세요.");
         }

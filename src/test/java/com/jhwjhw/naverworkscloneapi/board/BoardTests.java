@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.jhwjhw.naverworkscloneapi.board.domain.Board;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardRepository;
 import com.jhwjhw.naverworkscloneapi.identity.domain.Company;
@@ -19,6 +20,8 @@ import com.jhwjhw.naverworkscloneapi.identity.repository.MembershipRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.UserAccountRepository;
 import com.jhwjhw.naverworkscloneapi.notification.NotificationResponse;
 import com.jhwjhw.naverworkscloneapi.notification.NotificationService;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -310,6 +313,54 @@ class BoardTests {
 
     private List<String> titles(Membership member) {
         return notifications.list(member.getId(), null).stream().map(NotificationResponse.Item::title).toList();
+    }
+
+    @Test
+    void draftsAndScheduledPostsStayWithTheAuthorUntilPublished() {
+        // 임시저장: 제목 없이도 저장, 목록·남(관리자 포함)에게는 안 보이고 내 임시저장함에만
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var draft = service.create(me.getId(), new BoardRequest.PostCreate(free, "", doc("쓰는 중"), false, false,
+                List.of(), BoardRequest.SaveMode.DRAFT, null));
+        assertThat(draft.status()).isEqualTo(PostStatus.DRAFT);
+        assertThat(service.list(colleague.getId(), BoardService.View.LATEST, null, null).items()).isEmpty();
+        assertThatThrownBy(() -> service.detail(admin.getId(), draft.id())).isInstanceOf(BoardException.class);
+        assertThat(ids(service.list(me.getId(), BoardService.View.DRAFTS, null, null))).containsExactly(draft.id());
+        assertThat(service.list(colleague.getId(), BoardService.View.DRAFTS, null, null).items()).isEmpty();
+
+        // 이어 써서 등록(등록에는 제목이 필요)
+        assertThatThrownBy(() -> service.update(me.getId(), draft.id(), new BoardRequest.PostUpdate("", doc("완성"),
+                false, false, List.of(), draft.version(), BoardRequest.SaveMode.PUBLISH, null)))
+                .isInstanceOf(BoardException.class);
+        var published = service.update(me.getId(), draft.id(), new BoardRequest.PostUpdate("이어 쓴 글", doc("완성"),
+                false, false, List.of(), draft.version(), BoardRequest.SaveMode.PUBLISH, null));
+        assertThat(published.status()).isEqualTo(PostStatus.PUBLISHED);
+        assertThat(ids(service.list(colleague.getId(), BoardService.View.LATEST, null, null)))
+                .containsExactly(draft.id());
+        assertThat(service.list(me.getId(), BoardService.View.DRAFTS, null, null).items()).isEmpty();
+
+        // 등록예약: 시각 검사, 예약함에만, 때가 되기 전에는 공개·알림 없음
+        Long notice = board(admin, BoardType.NOTICE, company.getName()).id();
+        assertThatThrownBy(() -> service.create(admin.getId(), new BoardRequest.PostCreate(notice, "예약 공지",
+                doc("x"), false, false, List.of(), BoardRequest.SaveMode.SCHEDULE, Instant.now())))
+                .isInstanceOf(BoardException.class);
+        var scheduled = service.create(admin.getId(), new BoardRequest.PostCreate(notice, "예약 공지", doc("x"),
+                false, false, List.of(), BoardRequest.SaveMode.SCHEDULE, Instant.now().plus(Duration.ofHours(1))));
+        assertThat(scheduled.status()).isEqualTo(PostStatus.SCHEDULED);
+        assertThat(ids(service.list(admin.getId(), BoardService.View.SCHEDULED, null, null)))
+                .containsExactly(scheduled.id());
+        assertThat(service.list(me.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null).items()).isEmpty();
+        assertThat(titles(me)).doesNotContain("새 공지사항");
+        assertThat(service.publishDueScheduled()).isZero();
+
+        // 예약 시각이 지나면 한 번만 공개되고 그때 알림
+        posts.findById(scheduled.id()).orElseThrow()
+                .keepUnpublished(PostStatus.SCHEDULED, Instant.now().minusSeconds(1));
+        posts.flush();
+        assertThat(service.publishDueScheduled()).isEqualTo(1);
+        assertThat(service.publishDueScheduled()).isZero();
+        assertThat(ids(service.list(me.getId(), BoardService.View.TYPE, null, BoardType.NOTICE, null)))
+                .containsExactly(scheduled.id());
+        assertThat(titles(me)).contains("새 공지사항");
     }
 
     @Test

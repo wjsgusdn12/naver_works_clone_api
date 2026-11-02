@@ -1,6 +1,7 @@
 package com.jhwjhw.naverworkscloneapi.board;
 
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import com.jhwjhw.naverworkscloneapi.chat.domain.ChatAttachmentKind;
 import java.time.Instant;
 import java.util.List;
@@ -22,7 +23,7 @@ public final class BoardResponse {
     public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String companyName,
             String title, String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
             boolean mustRead, boolean read, int viewCount, int commentCount, boolean hasFile, boolean answered,
-            Instant deletedAt) {
+            Instant deletedAt, PostStatus status, Instant publishAt) {
     }
 
     // pinned: 게시판 첫 페이지에만 주는 중요 글(맨 위 고정, 검색 중이면 없음). page는 0부터.
@@ -47,7 +48,7 @@ public final class BoardResponse {
             String authorName, String authorDepartmentName, Instant createdAt, Instant updatedAt, boolean important,
             boolean mustRead, int viewCount, Instant answeredAt, Instant deletedAt, long version,
             List<Attachment> attachments, List<Comment> comments, boolean canEdit, boolean canDelete,
-            boolean canRestore, boolean canSeeReaders, boolean canComment) {
+            boolean canRestore, boolean canSeeReaders, boolean canComment, PostStatus status, Instant publishAt) {
     }
 
     // companyName: 공통 게시판은 여러 회사 사람이 섞이므로 함께 보여 줌

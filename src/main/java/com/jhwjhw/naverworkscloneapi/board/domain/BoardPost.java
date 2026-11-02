@@ -68,6 +68,14 @@ public class BoardPost {
     // 글을 쓰거나 고치거나 댓글이 달린 마지막 시각("글/댓글 업데이트 순" 정렬). V34 이전 글은 null.
     private Instant activityAt;
 
+    // 임시저장·등록예약·등록. 목록·검색·알림은 등록된 글만.
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private PostStatus status = PostStatus.PUBLISHED;
+
+    // 등록예약 시각(예약 글만). 공개되면 비움.
+    private Instant publishAt;
+
     @Version
     private long version;
 
@@ -95,6 +103,25 @@ public class BoardPost {
         this.mustRead = mustRead;
         this.updatedAt = Instant.now();
         this.activityAt = this.updatedAt;
+    }
+
+    // 임시저장(DRAFT)으로 두거나 at에 등록예약(SCHEDULED). 등록된 글에는 쓰지 않음.
+    public void keepUnpublished(PostStatus status, Instant at) {
+        this.status = status;
+        this.publishAt = status == PostStatus.SCHEDULED ? at : null;
+    }
+
+    // 지금 공개. 등록 시각을 공개한 때로 맞춰 목록 맨 위에 오게 함.
+    public void publish(Instant at) {
+        this.status = PostStatus.PUBLISHED;
+        this.publishAt = null;
+        this.createdAt = at;
+        this.activityAt = at;
+        this.updatedAt = null;
+    }
+
+    public boolean isPublished() {
+        return status == PostStatus.PUBLISHED;
     }
 
     public void moveToTrash(Membership by, Instant at) {

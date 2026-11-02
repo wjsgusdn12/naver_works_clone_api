@@ -2,6 +2,7 @@ package com.jhwjhw.naverworkscloneapi.board.repository;
 
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
+import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -18,7 +19,10 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     String SEARCH = "and (:search = false or lower(p.title) like :keyword escape '\\' "
             + "or lower(p.contentText) like :keyword escape '\\' or lower(u.displayName) like :keyword escape '\\') ";
 
-    String PAGE_WHERE = "where b.id in :boardIds and p.deletedAt is null "
+    // 목록·검색은 등록된 글만(임시저장·예약 글은 쓴 사람의 임시저장함·예약함에서만)
+    String PUBLISHED = "and p.status = com.jhwjhw.naverworkscloneapi.board.domain.PostStatus.PUBLISHED ";
+
+    String PAGE_WHERE = "where b.id in :boardIds and p.deletedAt is null " + PUBLISHED
             + "and (:admin = true or b.type <> :hiddenType or a.id = :me) "
             + "and (:mustRead = false or p.mustRead = true) "
             + "and (:important = false or p.important = true) "
@@ -43,7 +47,7 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             @Param("unread") boolean unread, @Param("search") boolean search, @Param("keyword") String keyword,
             @Param("activity") boolean activity, Pageable pageable);
 
-    String TRASH_WHERE = "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since "
+    String TRASH_WHERE = "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since " + PUBLISHED
             + "and (:admin = true or p.deletedBy.id = :me) " + SEARCH;
 
     // 휴지통: since 이후에 지운 글. 관리자가 아니면 내가 지운 글만.
@@ -69,6 +73,26 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     @Query("update BoardPost p set p.commentCount = p.commentCount + :delta "
             + "where p.id = :id and p.commentCount + :delta >= 0")
     void changeCommentCount(@Param("id") Long id, @Param("delta") int delta);
+
+    // 임시저장함·예약함: 내 글 중 그 상태(휴지통 제외). 최근 것부터.
+    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
+            + "join fetch a.userAccount where a.id = :me and p.status = :status and p.deletedAt is null "
+            + "order by p.id desc",
+            countQuery = "select count(p) from BoardPost p where p.author.id = :me and p.status = :status "
+                    + "and p.deletedAt is null")
+    Page<BoardPost> findMine(@Param("me") Long me, @Param("status") PostStatus status, Pageable pageable);
+
+    // 예약 시각이 지난 예약 글
+    @Query("select p.id from BoardPost p where p.status = com.jhwjhw.naverworkscloneapi.board.domain.PostStatus.SCHEDULED "
+            + "and p.publishAt <= :now and p.deletedAt is null order by p.publishAt")
+    List<Long> findDueScheduledIds(@Param("now") Instant now);
+
+    // 예약 글 공개. 아직 예약 상태일 때만 바꿔서(서버가 여러 대여도) 한 번만 공개되게 함. 바뀐 행 수를 돌려줌.
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update BoardPost p set p.status = com.jhwjhw.naverworkscloneapi.board.domain.PostStatus.PUBLISHED, "
+            + "p.publishAt = null, p.createdAt = :now, p.activityAt = :now where p.id = :id "
+            + "and p.status = com.jhwjhw.naverworkscloneapi.board.domain.PostStatus.SCHEDULED and p.deletedAt is null")
+    int publishScheduled(@Param("id") Long id, @Param("now") Instant now);
 
     // 댓글이 달린 시각을 마지막 활동으로. 댓글 수와 같은 이유로 version을 올리지 않음.
     @Modifying(clearAutomatically = true, flushAutomatically = true)
