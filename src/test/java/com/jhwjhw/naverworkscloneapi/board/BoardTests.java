@@ -249,6 +249,29 @@ class BoardTests {
     }
 
     @Test
+    void checkedPostsCanBeMarkedReadTogether() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var first = write(me, free, "첫 글");
+        var second = write(me, free, "둘째 글");
+        service.markRead(colleague.getId(), first.id());
+
+        // 이미 읽은 글은 건너뛰고, 중복 id도 한 번만
+        assertThat(service.markReadAll(colleague.getId(), List.of(first.id(), second.id(), second.id())))
+                .isEqualTo(1);
+        assertThat(service.list(colleague.getId(), BoardService.View.BOARD, free, null).items())
+                .allMatch(BoardResponse.PostSummary::read);
+        assertThat(service.detail(me.getId(), second.id()).viewCount()).isEqualTo(1);
+
+        // 볼 수 없는 글이 섞이면 아무것도 처리하지 않음
+        Long inquiry = board(me, BoardType.INQUIRY, company.getName()).id();
+        var secret = write(me, inquiry, "내 문의");
+        var third = write(me, free, "셋째 글");
+        assertThatThrownBy(() -> service.markReadAll(colleague.getId(), List.of(third.id(), secret.id())))
+                .isInstanceOf(BoardException.class);
+        assertThat(service.detail(me.getId(), third.id()).viewCount()).isZero();
+    }
+
+    @Test
     void searchMatchesTitleBodyOrAuthorAndPagesAreNumbered() {
         Long free = board(me, BoardType.FREE, company.getName()).id();
         var important = service.create(me.getId(),

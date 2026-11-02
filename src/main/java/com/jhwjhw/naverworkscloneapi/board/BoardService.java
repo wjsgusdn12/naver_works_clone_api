@@ -334,6 +334,23 @@ public class BoardService {
         postRepository.increaseViewCount(postId);
     }
 
+    // 목록에서 고른 글을 한꺼번에 읽음으로(글을 연 것과 같음: 읽음 기록·조회수 1). 볼 수 없는 글이 섞이면 전체 실패.
+    // 돌려주는 값은 새로 읽음 처리한 글 수(이미 읽었거나 휴지통 글은 건너뜀).
+    @Transactional
+    public int markReadAll(Long membershipId, List<Long> postIds) {
+        Viewer viewer = viewer(membershipId);
+        // 먼저 모두 볼 수 있는지 확인한 뒤에 기록(중간에 실패해 일부만 처리되는 일이 없게)
+        List<BoardPost> posts = new LinkedHashSet<>(postIds).stream().map(id -> readablePost(viewer, id)).toList();
+        int marked = 0;
+        for (BoardPost post : posts) {
+            if (post.isDeleted() || readRepository.existsByPostIdAndMembershipId(post.getId(), viewer.id())) continue;
+            readRepository.saveAndFlush(new BoardPostRead(post, viewer.me()));
+            postRepository.increaseViewCount(post.getId());
+            marked++;
+        }
+        return marked;
+    }
+
     @Transactional
     public BoardResponse.PostDetail create(Long membershipId, BoardRequest.PostCreate request) {
         Viewer viewer = viewer(membershipId);

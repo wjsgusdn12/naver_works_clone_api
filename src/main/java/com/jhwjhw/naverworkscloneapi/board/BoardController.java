@@ -76,6 +76,20 @@ public class BoardController {
         return ApiResponse.success("BOARD_POST_FOUND", "글을 조회했습니다.", service.detail(id(jwt), postId));
     }
 
+    // 목록에서 고른 글을 한꺼번에 읽음으로. 결과는 새로 읽음 처리한 글 수.
+    @PostMapping("/post/read")
+    public ApiResponse<Integer> markRead(@AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody BoardRequest.MarkRead request) {
+        int marked;
+        try {
+            marked = service.markReadAll(id(jwt), request.postIds());
+        } catch (DataIntegrityViolationException ignored) {
+            // 같은 글을 다른 탭에서 동시에 열어 이미 기록됨. 한 번 더 하면 남은 글만 처리됨.
+            marked = service.markReadAll(id(jwt), request.postIds());
+        }
+        return ApiResponse.success("BOARD_POST_READ", "읽음으로 표시했습니다.", marked);
+    }
+
     @PostMapping("/post/create")
     public ApiResponse<BoardResponse.PostDetail> create(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody BoardRequest.PostCreate request) {
