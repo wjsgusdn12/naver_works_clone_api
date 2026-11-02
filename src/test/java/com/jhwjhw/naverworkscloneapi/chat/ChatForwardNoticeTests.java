@@ -128,6 +128,22 @@ class ChatForwardNoticeTests {
         assertThat(events.stream(ChatNoticeChangedEvent.class).filter(event -> event.notices().isEmpty())).hasSize(1);
     }
 
+    // 공지 등록·내리기 안내(시스템 메시지)도 일반 메시지처럼 실시간 새 메시지 이벤트로 나가 바로 화면에 뜸.
+    @Test
+    void noticeSystemMessagesArePublishedInRealtime() {
+        long before = events.stream(ChatMessageCreatedEvent.class).count();
+        service.updateNotice(other.getId(), sourceRoom.getId(), messageId);
+        service.removeNotice(other.getId(), sourceRoom.getId(), messageId);
+        List<ChatMessageCreatedEvent> created = events.stream(ChatMessageCreatedEvent.class).skip(before).toList();
+        assertThat(created).hasSize(2);
+        assertThat(created).allSatisfy(event -> {
+            assertThat(event.chatRoomId()).isEqualTo(sourceRoom.getId());
+            assertThat(event.message().type()).isEqualTo("SYSTEM");
+        });
+        assertThat(created).extracting(event -> event.message().content())
+                .containsExactly("동료님이 공지를 등록했습니다.", "동료님이 공지를 내렸습니다.");
+    }
+
     // 공지로 걸린 메시지를 고치면 공지 내용도 바뀌고 공지 변경 이벤트가 다시 나감. 공지 아닌 메시지 수정은 이벤트 없음.
     @Test
     void editingNoticeMessageRefreshesNotice() {

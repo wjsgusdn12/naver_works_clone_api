@@ -911,8 +911,13 @@ public class ChatRoomService {
         }
     }
 
+    // 시스템 안내(공지·초대·나가기 등)를 저장하고, 일반 메시지처럼 방 구독자에게 실시간으로 보냄
+    // (DB 커밋 뒤 발행). 알림은 만들지 않음.
     private void systemMessage(ChatRoom room, Membership actor, String content) {
-        messageRepository.save(new ChatMessage(room, actor, content, ChatMessageType.SYSTEM));
+        ChatMessage message = messageRepository.save(new ChatMessage(room, actor, content, ChatMessageType.SYSTEM));
+        ChatRoomResponse.Message response = message(message, readSummaries(List.of(message)).get(message.getId()),
+                List.of());
+        eventPublisher.publishEvent(new ChatMessageCreatedEvent(room.getId(), response));
     }
 
     private ChatRoomResponse.Room room(ChatRoom room, Long requesterId) {
