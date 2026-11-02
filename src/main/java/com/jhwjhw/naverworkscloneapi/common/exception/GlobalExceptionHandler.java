@@ -3,6 +3,7 @@ package com.jhwjhw.naverworkscloneapi.common.exception;
 import com.jhwjhw.naverworkscloneapi.auth.AuthException;
 import com.jhwjhw.naverworkscloneapi.auth.InvalidAuthenticationException;
 import com.jhwjhw.naverworkscloneapi.addressbook.AddressBookException;
+import com.jhwjhw.naverworkscloneapi.board.BoardException;
 import com.jhwjhw.naverworkscloneapi.chat.ChatException;
 import com.jhwjhw.naverworkscloneapi.common.response.ApiResponse;
 import com.jhwjhw.naverworkscloneapi.notification.NotificationException;
@@ -37,6 +38,27 @@ public class GlobalExceptionHandler {
                         case "CHAT_ATTACHMENT_SAVE_FAILED" -> HttpStatus.INTERNAL_SERVER_ERROR;
                         case "CHAT_ATTACHMENT_RATE_LIMITED", "CHAT_ATTACHMENT_DAILY_LIMIT" -> HttpStatus.TOO_MANY_REQUESTS;
                         case "CHAT_ATTACHMENT_STORAGE_FULL" -> HttpStatus.SERVICE_UNAVAILABLE;
+                        default -> HttpStatus.BAD_REQUEST;
+                };
+                return ResponseEntity.status(status).body(ApiResponse.failure(exception.getCode(), exception.getMessage()));
+        }
+
+        // 게시판 규칙 위반 처리
+        @ExceptionHandler(BoardException.class)
+        public ResponseEntity<ApiResponse<Void>> handleBoardException(BoardException exception,
+                        HttpServletRequest request) {
+                log.warn("Board request rejected. code={}, method={}, path={}", exception.getCode(),
+                                request.getMethod(), request.getRequestURI());
+                HttpStatus status = switch (exception.getCode()) {
+                        case "BOARD_ADMIN_REQUIRED", "BOARD_WRITE_FORBIDDEN", "BOARD_POST_AUTHOR_REQUIRED",
+                                        "BOARD_POST_RESTORE_FORBIDDEN", "BOARD_READERS_FORBIDDEN",
+                                        "BOARD_COMMENT_AUTHOR_REQUIRED" ->
+                                HttpStatus.FORBIDDEN;
+                        case "BOARD_NOT_FOUND", "BOARD_POST_NOT_FOUND", "BOARD_COMMENT_NOT_FOUND",
+                                        "BOARD_ATTACHMENT_NOT_FOUND" ->
+                                HttpStatus.NOT_FOUND;
+                        case "BOARD_POST_CONFLICT", "BOARD_POST_ALREADY_DELETED" -> HttpStatus.CONFLICT;
+                        case "BOARD_ATTACHMENT_RATE_LIMITED" -> HttpStatus.TOO_MANY_REQUESTS;
                         default -> HttpStatus.BAD_REQUEST;
                 };
                 return ResponseEntity.status(status).body(ApiResponse.failure(exception.getCode(), exception.getMessage()));
