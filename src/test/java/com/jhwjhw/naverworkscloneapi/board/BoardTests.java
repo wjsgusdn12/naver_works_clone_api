@@ -13,6 +13,8 @@ import com.jhwjhw.naverworkscloneapi.identity.repository.CompanyRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.DepartmentRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.MembershipRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.UserAccountRepository;
+import com.jhwjhw.naverworkscloneapi.notification.NotificationResponse;
+import com.jhwjhw.naverworkscloneapi.notification.NotificationService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,6 +41,7 @@ class BoardTests {
     @Autowired private DepartmentRepository departments;
     @Autowired private UserAccountRepository accounts;
     @Autowired private MembershipRepository memberships;
+    @Autowired private NotificationService notifications;
 
     private Company company;
     private Department sales;
@@ -246,6 +249,44 @@ class BoardTests {
         assertThat(boardPage.pinned().getFirst().read()).isTrue();
         assertThat(ids(service.list(colleague.getId(), BoardService.View.MINE, null, null)))
                 .containsExactly(normal.id());
+    }
+
+    @Test
+    void noticesMustReadInquiriesAndCommentsNotifyTheRightPeople() {
+        // 공지사항: 같은 회사 구성원 모두(글쓴이 제외), 다른 회사는 없음
+        Long notice = board(admin, BoardType.NOTICE, company.getName()).id();
+        write(admin, notice, "가상 공지");
+        assertThat(titles(me)).containsExactly("새 공지사항");
+        assertThat(titles(developer)).containsExactly("새 공지사항");
+        assertThat(titles(admin)).isEmpty();
+        assertThat(titles(outsider)).isEmpty();
+
+        // 일반 글은 알림 없음, 부서 게시판 필독 글은 그 부서 사람에게만
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var normal = write(me, free, "일반 글");
+        service.create(me.getId(), new BoardRequest.PostCreate(department(me, sales).id(), "영업팀 필독",
+                doc("필독"), false, true, List.of()));
+        assertThat(titles(colleague)).containsExactly("새 필독 글", "새 공지사항");
+        assertThat(titles(developer)).containsExactly("새 공지사항");
+
+        // 내 글에 남이 댓글 → 글쓴이에게, 내 댓글은 알림 없음
+        service.addComment(colleague.getId(), normal.id(), new BoardRequest.CommentCreate("좋아요"));
+        service.addComment(me.getId(), normal.id(), new BoardRequest.CommentCreate("감사합니다"));
+        assertThat(titles(me)).containsExactly("새 댓글", "새 공지사항");
+        assertThat(titles(colleague)).containsExactly("새 필독 글", "새 공지사항");
+
+        // 새 문의 → 관리자, 관리자 답변 → 문의한 사람에게 "문의 답변 완료"
+        Long inquiry = board(me, BoardType.INQUIRY, company.getName()).id();
+        var question = write(me, inquiry, "가상 문의");
+        assertThat(titles(admin)).containsExactly("새 문의");
+        service.addComment(admin.getId(), question.id(), new BoardRequest.CommentCreate("답변입니다"));
+        assertThat(titles(me).getFirst()).isEqualTo("문의 답변 완료");
+        assertThat(notifications.list(me.getId(), null).getFirst().linkPath())
+                .isEqualTo("/board?postId=" + question.id());
+    }
+
+    private List<String> titles(Membership member) {
+        return notifications.list(member.getId(), null).stream().map(NotificationResponse.Item::title).toList();
     }
 
     @Test

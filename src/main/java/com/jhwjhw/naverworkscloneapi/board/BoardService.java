@@ -22,6 +22,8 @@ import com.jhwjhw.naverworkscloneapi.identity.domain.Role;
 import com.jhwjhw.naverworkscloneapi.identity.repository.CompanyRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.DepartmentRepository;
 import com.jhwjhw.naverworkscloneapi.identity.repository.MembershipRepository;
+import com.jhwjhw.naverworkscloneapi.notification.NotificationService;
+import com.jhwjhw.naverworkscloneapi.notification.domain.NotificationCategory;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
@@ -71,6 +73,7 @@ public class BoardService {
     private final CompanyRepository companyRepository;
     private final DepartmentRepository departmentRepository;
     private final BoardContent content;
+    private final NotificationService notificationService;
     private final ChatAttachmentStore attachmentStore;
 
     // 목록 종류(사이드바 메뉴). TYPE: 볼 수 있는 게시판 중 한 종류(공지·자유·문의) 전체를 한 목록으로(관리자는 모든 회사).
@@ -388,6 +391,7 @@ public class BoardService {
         BoardPost post = postRepository.save(new BoardPost(board, viewer.me(), title(request.title()), body.json(),
                 body.text(), flags && request.important(), flags && request.mustRead()));
         attach(viewer, post, request.attachmentIds(), body.imageAttachmentIds());
+        notifyNewPost(viewer, post);
         return detail(membershipId, post.getId());
     }
 
@@ -480,7 +484,48 @@ public class BoardService {
         postRepository.changeCommentCount(postId, 1);
         postRepository.touchActivity(postId, Instant.now());
         if (answer) postRepository.markAnswered(postId, Instant.now());
+        notifyComment(viewer, post, text, answer);
         return detail(membershipId, postId);
+    }
+
+    // ---------- 알림(시스템 분류, 누르면 그 글로) ----------
+
+    // 새 글 알림: 문의하기는 관리자에게, 공지사항·필독 글은 그 게시판을 볼 수 있는 구성원에게(글쓴이 제외). 일반 글은 알림 없음.
+    private void notifyNewPost(Viewer viewer, BoardPost post) {
+        Board board = post.getBoard();
+        String link = postLink(post);
+        String writer = viewer.me().getUserAccount().getDisplayName();
+        if (board.getType() == BoardType.INQUIRY) {
+            for (Membership admin : membershipRepository.findEnabledByRole(Role.ADMIN)) {
+                if (admin.getId().equals(viewer.id())) continue;
+                notificationService.create(admin.getId(), NotificationCategory.SYSTEM, "새 문의",
+                        writer + "님이 문의를 남겼습니다: " + post.getTitle(), link);
+            }
+            return;
+        }
+        if (board.getType() != BoardType.NOTICE && !post.isMustRead()) return;
+        String title = board.getType() == BoardType.NOTICE ? "새 공지사항" : "새 필독 글";
+        List<Membership> readers = board.getDepartment() != null
+                ? membershipRepository.findEnabledByDepartmentId(board.getDepartment().getId())
+                : membershipRepository.findEnabledByCompanyId(board.getCompany().getId());
+        for (Membership reader : readers) {
+            if (reader.getId().equals(viewer.id())) continue;
+            notificationService.create(reader.getId(), NotificationCategory.SYSTEM, title,
+                    "[" + board.getName() + "] " + post.getTitle() + " - " + writer, link);
+        }
+    }
+
+    // 내 글에 남이 댓글을 달면 글쓴이에게. 문의하기에 관리자가 달면 "문의 답변 완료".
+    private void notifyComment(Viewer viewer, BoardPost post, String text, boolean answer) {
+        Long authorId = post.getAuthor().getId();
+        if (authorId.equals(viewer.id())) return;
+        String writer = viewer.me().getUserAccount().getDisplayName();
+        notificationService.create(authorId, NotificationCategory.SYSTEM, answer ? "문의 답변 완료" : "새 댓글",
+                writer + "님 (" + post.getTitle() + "): " + text, postLink(post));
+    }
+
+    private static String postLink(BoardPost post) {
+        return "/board?postId=" + post.getId();
     }
 
     @Transactional

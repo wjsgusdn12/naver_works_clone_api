@@ -203,6 +203,7 @@ public class AuthService {
                 membership.getCompany().getId(), request.joinType());
         notificationService.create(membership.getId(), NotificationCategory.SYSTEM, "가입을 환영합니다",
                 "복구 코드는 내 프로필에서 다시 확인할 수 있습니다. 브라우저: " + browserName(userAgent), null);
+        notifyNewMember(membership);
         AuthResult session = issueTokens(membership, false, Instant.now().plus(appAuthProperties.refreshTokenExpiration()));
         return new SignupResult(session, recoveryCode);
     }
@@ -308,9 +309,21 @@ public class AuthService {
         refreshTokenRepository.findByMembershipIdAndRevokedAtIsNull(membershipId).forEach(token -> token.revoke(now));
         notificationService.create(membershipId, NotificationCategory.SYSTEM, "회사 이동",
                 placement.company().getName() + " 소속으로 옮겼습니다.", null);
+        notifyNewMember(membership);
         log.info("Company moved. membershipId={}, fromCompanyId={}, toCompanyId={}, joinType={}", membershipId,
                 previousCompanyId, placement.company().getId(), request.joinType());
         return issueTokens(membership, false, now.plus(appAuthProperties.refreshTokenExpiration()));
+    }
+
+    // 가입하거나 회사를 옮겨 들어오면 그 회사의 다른 구성원에게 "새 구성원" 알림(주소록 분류).
+    private void notifyNewMember(Membership membership) {
+        String name = membership.getUserAccount().getDisplayName();
+        String companyName = membership.getCompany().getName();
+        for (Membership colleague : membershipRepository.findEnabledByCompanyId(membership.getCompany().getId())) {
+            if (colleague.getId().equals(membership.getId())) continue;
+            notificationService.create(colleague.getId(), NotificationCategory.ADDRESS_BOOK, "새 구성원",
+                    name + "님이 " + companyName + "에 합류했습니다.", "/addressBook");
+        }
     }
 
     // 복구 코드 재발급. 이전 코드는 즉시 무효.
