@@ -15,6 +15,11 @@ public interface BoardAttachmentRepository extends JpaRepository<BoardAttachment
     @Query("select distinct a.post.id from BoardAttachment a where a.post.id in :postIds and a.inlineImage = false")
     List<Long> findPostIdsWithFiles(@Param("postIds") Collection<Long> postIds);
 
+    // 파일 검색 결과: 글마다 이름이 검색어와 맞는 첨부 파일. [글 ID, 파일 이름], 올린 순
+    @Query("select a.post.id, a.originalName from BoardAttachment a where a.post.id in :postIds "
+            + "and a.inlineImage = false and lower(a.originalName) like :keyword escape '\\' order by a.id")
+    List<Object[]> findMatchingNames(@Param("postIds") Collection<Long> postIds, @Param("keyword") String keyword);
+
     // 너무 자주 올리는 것 막기: 최근 since 이후 이 사람이 올린 수
     long countByUploaderIdAndCreatedAtAfter(Long uploaderId, Instant since);
 

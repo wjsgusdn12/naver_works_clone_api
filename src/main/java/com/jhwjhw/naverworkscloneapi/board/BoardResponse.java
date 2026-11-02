@@ -19,11 +19,16 @@ public final class BoardResponse {
     }
 
     // 목록의 글 한 줄. companyName: 그 게시판의 회사, read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지,
-    // answered: 문의하기 답변 완료, reactionCount: 이모지 리액션을 남긴 사람 수.
+    // answered: 문의하기 답변 완료, reactionCount: 이모지 리액션을 남긴 사람 수,
+    // matchText: 파일·댓글 검색일 때 검색어와 맞은 파일 이름·댓글 내용(그 밖에는 null).
     public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String companyName,
             String title, String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
             boolean mustRead, boolean read, int viewCount, int commentCount, boolean hasFile, boolean answered,
-            Instant deletedAt, PostStatus status, Instant publishAt, int reactionCount) {
+            Instant deletedAt, PostStatus status, Instant publishAt, int reactionCount, String matchText) {
+    }
+
+    // 검색 결과 탭별 건수(게시글: 제목·본문, 작성자, 파일, 댓글)
+    public record SearchCounts(long post, long author, long file, long comment) {
     }
 
     // pinned: 게시판 첫 페이지에만 주는 중요 글(맨 위 고정, 검색 중이면 없음). page는 0부터.

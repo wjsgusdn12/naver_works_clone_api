@@ -63,9 +63,18 @@ public class BoardController {
             @RequestParam(required = false) BoardType type, @RequestParam(defaultValue = "0") int page,
             @RequestParam(required = false) String keyword, @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "CREATED") BoardService.Sort sort,
-            @RequestParam(defaultValue = "false") boolean unread) {
+            @RequestParam(defaultValue = "false") boolean unread,
+            @RequestParam(defaultValue = "ALL") BoardService.SearchScope scope) {
         return ApiResponse.success("BOARD_POST_LIST_FOUND", "글 목록을 조회했습니다.", service.list(id(jwt), view,
-                boardId, type, page, keyword, new BoardService.ListOptions(size, sort, unread)));
+                boardId, type, page, keyword, new BoardService.ListOptions(size, sort, unread), scope));
+    }
+
+    // 검색 결과 화면 탭별 건수(게시글·작성자·파일·댓글)
+    @GetMapping("/post/search/counts")
+    public ApiResponse<BoardResponse.SearchCounts> searchCounts(@AuthenticationPrincipal Jwt jwt,
+            @RequestParam String keyword) {
+        return ApiResponse.success("BOARD_SEARCH_COUNTS_FOUND", "검색 결과 건수를 조회했습니다.",
+                service.searchCounts(id(jwt), keyword));
     }
 
     // 글 보기. 처음 여는 것이면 읽음 기록·조회수 1.

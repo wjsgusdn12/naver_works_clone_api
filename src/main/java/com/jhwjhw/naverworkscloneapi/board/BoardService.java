@@ -264,12 +264,19 @@ public class BoardService {
     @Transactional(readOnly = true)
     public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
             String keyword, ListOptions options) {
+        return list(membershipId, view, boardId, type, page, keyword, options, SearchScope.ALL);
+    }
+
+    // scope: 검색할 곳(검색 결과 화면의 탭). 파일·댓글이면 줄마다 맞은 파일 이름·댓글 내용(matchText)을 함께 줌.
+    @Transactional(readOnly = true)
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
+            String keyword, ListOptions options, SearchScope searchScope) {
         Viewer viewer = viewer(membershipId);
         int pageIndex = page == null ? 0 : Math.max(page, 0);
         int size = options.size();
-        String trimmed = keyword == null ? "" : keyword.strip();
-        if (trimmed.length() > KEYWORD_MAX) trimmed = trimmed.substring(0, KEYWORD_MAX);
-        Search search = new Search(!trimmed.isEmpty(), likePattern(trimmed));
+        String trimmed = trimKeyword(keyword);
+        Search search = new Search(!trimmed.isEmpty(), likePattern(trimmed),
+                searchScope == null ? SearchScope.ALL : searchScope);
         if (view == View.BOARD || view == View.TYPE) {
             List<Long> scope;
             if (view == View.BOARD) {
@@ -290,7 +297,7 @@ public class BoardService {
                             PINNED_MAX).getContent())
                     : List.of();
             return page(viewer, pinned, find(viewer, scope, false, false, pin, false, search, options, pageIndex,
-                    size));
+                    size), search);
         }
         if (view == View.DRAFTS || view == View.SCHEDULED) {
             PostStatus status = view == View.DRAFTS ? PostStatus.DRAFT : PostStatus.SCHEDULED;
@@ -300,16 +307,40 @@ public class BoardService {
         if (view == View.TRASH) {
             Page<BoardPost> rows = boardIds.isEmpty() ? Page.empty(PageRequest.of(pageIndex, size))
                     : postRepository.findTrash(boardIds, viewer.id(), viewer.admin(), Instant.now().minus(TRASH_KEEP),
-                            search.on(), search.pattern(), PageRequest.of(pageIndex, size));
-            return page(viewer, List.of(), rows);
+                            search.on(), search.pattern(), search.scope().name(), PageRequest.of(pageIndex, size));
+            return page(viewer, List.of(), rows, search);
         }
         return page(viewer, List.of(), find(viewer, boardIds, view == View.MUST_READ, view == View.IMPORTANT, false,
-                view == View.MINE, search, options, pageIndex, size));
+                view == View.MINE, search, options, pageIndex, size), search);
     }
 
     // on이 false면 검색하지 않음. pattern은 like에 바로 넣는 소문자 "%검색어%"(%·_·\는 글자 그대로 찾게 이스케이프).
-    private record Search(boolean on, String pattern) {
-        static final Search NONE = new Search(false, "");
+    private record Search(boolean on, String pattern, SearchScope scope) {
+        static final Search NONE = new Search(false, "", SearchScope.ALL);
+    }
+
+    // 검색할 곳. ALL: 제목·본문·글쓴이(게시판 안 검색·휴지통), 나머지는 검색 결과 화면의 탭.
+    public enum SearchScope {
+        ALL, POST, AUTHOR, FILE, COMMENT
+    }
+
+    private static String trimKeyword(String keyword) {
+        String trimmed = keyword == null ? "" : keyword.strip();
+        return trimmed.length() > KEYWORD_MAX ? trimmed.substring(0, KEYWORD_MAX) : trimmed;
+    }
+
+    // 검색 결과 화면 탭별 건수. 최신글과 같은 범위(볼 수 있는 게시판 전체)에서 셈.
+    @Transactional(readOnly = true)
+    public BoardResponse.SearchCounts searchCounts(Long membershipId, String keyword) {
+        Viewer viewer = viewer(membershipId);
+        String trimmed = trimKeyword(keyword);
+        List<Long> boardIds = ids(visibleBoards(viewer));
+        if (trimmed.isEmpty() || boardIds.isEmpty()) return new BoardResponse.SearchCounts(0, 0, 0, 0);
+        String pattern = likePattern(trimmed);
+        Function<SearchScope, Long> count = scope -> postRepository.countPage(boardIds, viewer.id(), viewer.admin(),
+                BoardType.INQUIRY, false, false, false, false, false, true, pattern, scope.name());
+        return new BoardResponse.SearchCounts(count.apply(SearchScope.POST), count.apply(SearchScope.AUTHOR),
+                count.apply(SearchScope.FILE), count.apply(SearchScope.COMMENT));
     }
 
     private static String likePattern(String keyword) {
@@ -321,7 +352,7 @@ public class BoardService {
             boolean excludeImportant, boolean mine, Search search, ListOptions options, int page, int size) {
         if (boardIds.isEmpty()) return Page.empty(PageRequest.of(page, size));
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, mustRead, important,
-                excludeImportant, mine, options.unreadOnly(), search.on(), search.pattern(),
+                excludeImportant, mine, options.unreadOnly(), search.on(), search.pattern(), search.scope().name(),
                 options.sort() == Sort.ACTIVITY, PageRequest.of(page, size));
     }
 
@@ -329,17 +360,41 @@ public class BoardService {
     private List<BoardPost> homeRows(Viewer viewer, List<Long> boardIds) {
         if (boardIds.isEmpty()) return List.of();
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, false, false, false,
-                false, false, false, "", false, org.springframework.data.domain.Pageable.ofSize(HOME_SIZE)
+                false, false, false, "", SearchScope.ALL.name(), false,
+                org.springframework.data.domain.Pageable.ofSize(HOME_SIZE)
                         .withPage(0)).getContent();
     }
 
     private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows) {
-        return new BoardResponse.PostPage(pinned, summaries(viewer, rows.getContent()), rows.getNumber(),
-                rows.getTotalPages(), rows.getTotalElements());
+        return page(viewer, pinned, rows, Search.NONE);
+    }
+
+    private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows,
+            Search search) {
+        return new BoardResponse.PostPage(pinned, summaries(viewer, rows.getContent(), matchTexts(rows.getContent(),
+                search)), rows.getNumber(), rows.getTotalPages(), rows.getTotalElements());
+    }
+
+    // 파일·댓글 검색이면 글마다 처음 맞은 파일 이름·댓글 내용(쿼리 한 번). 그 밖에는 빈 지도.
+    private Map<Long, String> matchTexts(List<BoardPost> posts, Search search) {
+        if (!search.on() || posts.isEmpty()
+                || (search.scope() != SearchScope.FILE && search.scope() != SearchScope.COMMENT)) return Map.of();
+        List<Long> postIds = posts.stream().map(BoardPost::getId).toList();
+        List<Object[]> rows = search.scope() == SearchScope.FILE
+                ? attachmentRepository.findMatchingNames(postIds, search.pattern())
+                : commentRepository.findMatchingContents(postIds, search.pattern());
+        Map<Long, String> result = new java.util.HashMap<>();
+        for (Object[] row : rows) result.putIfAbsent((Long) row[0], preview((String) row[1]));
+        return result;
+    }
+
+    private List<BoardResponse.PostSummary> summaries(Viewer viewer, List<BoardPost> posts) {
+        return summaries(viewer, posts, Map.of());
     }
 
     // 글 줄 만들기. 읽음·첨부 여부·리액션 수는 페이지 전체를 쿼리 한 번씩으로 확인.
-    private List<BoardResponse.PostSummary> summaries(Viewer viewer, List<BoardPost> posts) {
+    private List<BoardResponse.PostSummary> summaries(Viewer viewer, List<BoardPost> posts,
+            Map<Long, String> matchTexts) {
         if (posts.isEmpty()) return List.of();
         List<Long> postIds = posts.stream().map(BoardPost::getId).toList();
         Set<Long> read = new HashSet<>(readRepository.findReadPostIds(viewer.id(), postIds));
@@ -354,7 +409,7 @@ public class BoardService {
                 post.isImportant(), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
                 post.getDeletedAt(), post.getStatus(), post.getPublishAt(),
-                reactionCounts.getOrDefault(post.getId(), 0))).toList();
+                reactionCounts.getOrDefault(post.getId(), 0), matchTexts.get(post.getId()))).toList();
     }
 
     private static String preview(String text) {
