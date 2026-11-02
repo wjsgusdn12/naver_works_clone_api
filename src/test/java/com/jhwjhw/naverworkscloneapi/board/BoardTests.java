@@ -80,7 +80,10 @@ class BoardTests {
 
     private Membership member(Company company, Department department, String email, String name, Role role) {
         UserAccount account = accounts.save(new UserAccount(email, "test-hash", name));
-        return memberships.save(new Membership(company, account, department, role));
+        Membership membership = new Membership(company, account, department, role);
+        // 모두 관리자 모드로 시작하므로, 일반 사용자 역할은 관리자 모드를 끈 상태로 만듦.
+        membership.changeAdminMode(role == Role.ADMIN);
+        return memberships.save(membership);
     }
 
     private BoardResponse.BoardItem board(Membership viewer, BoardType type, String companyName) {

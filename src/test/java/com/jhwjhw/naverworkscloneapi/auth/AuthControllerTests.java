@@ -110,7 +110,10 @@ class AuthControllerTests {
                 passwordEncoder.encode("safe-user-password"),
                 "테스트 일반 사용자"
         ));
-        testUserMembership = membershipRepository.save(new Membership(company, standardUser, null, Role.USER));
+        Membership standardMembership = new Membership(company, standardUser, null, Role.USER);
+        // 모두 관리자 모드로 시작하므로, 일반 사용자는 관리자 모드를 끈 상태로 만듦.
+        standardMembership.changeAdminMode(false);
+        testUserMembership = membershipRepository.save(standardMembership);
     }
 
     @Test
@@ -307,7 +310,8 @@ class AuthControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("AUTH_SIGNUP_SUCCESS"))
                 .andExpect(jsonPath("$.data.session.member.companyName").value("테스트 회사"))
-                .andExpect(jsonPath("$.data.session.member.role").value("USER"))
+                // 새 가입자도 관리자 모드로 시작.
+                .andExpect(jsonPath("$.data.session.member.role").value("ADMIN"))
                 .andExpect(jsonPath("$.data.session.member.loginId").value("newbie01"))
                 .andReturn();
         JsonNode body = objectMapper.readTree(signupResult.getResponse().getContentAsString());
@@ -466,6 +470,7 @@ class AuthControllerTests {
     }
 
     // 회사 옮기기: 새 회사를 만들어 옮기면 대표가 되고, 새 토큰의 회사 ID가 바뀜. 같은 회사로는 못 옮김.
+    // 권한은 관리자 모드로만 정하므로, 관리자 모드를 끈 사람은 회사를 만들어도 일반 사용자 권한.
     @Test
     void moveCompanyCreatesNewCompanyAndReissuesTokens() throws Exception {
         String token = accessTokenFor(testUserMembership);
@@ -476,7 +481,7 @@ class AuthControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("AUTH_COMPANY_MOVED"))
                 .andExpect(jsonPath("$.data.member.companyName").value("이직한 회사"))
-                .andExpect(jsonPath("$.data.member.role").value("ADMIN"))
+                .andExpect(jsonPath("$.data.member.role").value("USER"))
                 .andReturn();
         assertThat(moveResult.getResponse().getHeader("Set-Cookie")).contains("refreshToken=");
         String newToken = objectMapper.readTree(moveResult.getResponse().getContentAsString())
@@ -522,12 +527,38 @@ class AuthControllerTests {
                                 + "\"joinType\":\"INVITE\",\"inviteCode\":\"" + inviteCode + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.session.member.companyName").value("테스트 회사"))
-                .andExpect(jsonPath("$.data.session.member.role").value("USER"));
+                .andExpect(jsonPath("$.data.session.member.role").value("ADMIN"));
 
         // 일반 사용자는 초대 코드를 볼 수 없음.
         mockMvc.perform(get("/api/v1/auth/company/inviteCode")
                         .header("Authorization", "Bearer " + accessTokenFor(testUserMembership)))
                 .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("AUTH_INVITE_CODE_FORBIDDEN"));
+    }
+
+    // 관리자 모드: 켜면 관리자 권한(초대 코드 조회 가능), 끄면 일반 사용자. 내 정보의 role도 함께 바뀜.
+    @Test
+    void adminModeTogglesEffectiveRole() throws Exception {
+        String token = accessTokenFor(testUserMembership);
+        mockMvc.perform(post("/api/v1/auth/adminMode")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("AUTH_ADMIN_MODE_CHANGED"))
+                .andExpect(jsonPath("$.data.role").value("ADMIN"));
+        mockMvc.perform(get("/api/v1/auth/company/inviteCode").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/auth/adminMode")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("USER"));
+        mockMvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
+                .andExpect(jsonPath("$.data.role").value("USER"));
+        mockMvc.perform(get("/api/v1/auth/company/inviteCode").header("Authorization", "Bearer " + token))
                 .andExpect(jsonPath("$.code").value("AUTH_INVITE_CODE_FORBIDDEN"));
     }
 }
