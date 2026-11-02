@@ -5,6 +5,7 @@ import com.jhwjhw.naverworkscloneapi.chat.domain.ChatMessageAttachment;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatLinkPreviewRepository;
 import com.jhwjhw.naverworkscloneapi.chat.repository.ChatMessageAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.common.storage.FileStorage;
+import com.jhwjhw.naverworkscloneapi.identity.repository.MembershipRepository;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
@@ -37,6 +38,8 @@ public class ChatAttachmentCleanup {
     private final ChatLinkPreviewRepository linkPreviewRepository;
     // 게시판 첨부도 같은 저장소에 있음. 글에 붙은 것만 지키고, 올리기만 하고 글을 저장하지 않은 것은 고아로 정리.
     private final BoardAttachmentRepository boardAttachmentRepository;
+    // 프로필 사진도 같은 저장소에 있어 함께 지킴
+    private final MembershipRepository membershipRepository;
     private final FileStorage storage;
     private final TransactionTemplate transaction;
     private final Clock clock;
@@ -46,19 +49,22 @@ public class ChatAttachmentCleanup {
     @Autowired
     public ChatAttachmentCleanup(ChatMessageAttachmentRepository attachmentRepository,
             ChatLinkPreviewRepository linkPreviewRepository, BoardAttachmentRepository boardAttachmentRepository,
-            FileStorage storage, TransactionTemplate transaction, @Value("${app.attachment.retention-days:30}") long retentionDays,
+            MembershipRepository membershipRepository, FileStorage storage, TransactionTemplate transaction, @Value("${app.attachment.retention-days:30}") long retentionDays,
             @Value("${app.attachment.orphan-grace-hours:24}") long orphanGraceHours) {
-        this(attachmentRepository, linkPreviewRepository, boardAttachmentRepository, storage, transaction,
+        this(attachmentRepository, linkPreviewRepository, boardAttachmentRepository, membershipRepository, storage,
+                transaction,
                 Clock.systemUTC(), Duration.ofDays(retentionDays),
                 Duration.ofHours(orphanGraceHours));
     }
 
     ChatAttachmentCleanup(ChatMessageAttachmentRepository attachmentRepository,
             ChatLinkPreviewRepository linkPreviewRepository, BoardAttachmentRepository boardAttachmentRepository,
-            FileStorage storage, TransactionTemplate transaction, Clock clock, Duration retention, Duration orphanGrace) {
+            MembershipRepository membershipRepository, FileStorage storage, TransactionTemplate transaction, Clock clock,
+            Duration retention, Duration orphanGrace) {
         this.attachmentRepository = attachmentRepository;
         this.linkPreviewRepository = linkPreviewRepository;
         this.boardAttachmentRepository = boardAttachmentRepository;
+        this.membershipRepository = membershipRepository;
         this.storage = storage;
         this.transaction = transaction;
         this.clock = clock;
@@ -143,6 +149,7 @@ public class ChatAttachmentCleanup {
             referenced.addAll(linkPreviewRepository.findReferencedImageKeys(chunk));
             referenced.addAll(boardAttachmentRepository.findReferencedStorageKeys(chunk));
             referenced.addAll(boardAttachmentRepository.findReferencedThumbnailKeys(chunk));
+            referenced.addAll(membershipRepository.findReferencedProfileImageKeys(chunk));
             for (String key : chunk) {
                 if (referenced.contains(key)) continue;
                 delete(key);

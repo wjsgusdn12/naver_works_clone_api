@@ -138,7 +138,7 @@ public class ChatAttachmentStore {
     }
 
     // 파일 앞부분 바이트(12바이트면 충분)로 사진 형식을 판별. 사진이 아니면 null.
-    static String imageTypeOf(byte[] head) {
+    public static String imageTypeOf(byte[] head) {
         if (startsWith(head, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)) return "image/png";
         if (startsWith(head, 0xFF, 0xD8, 0xFF)) return "image/jpeg";
         if (startsWith(head, 'G', 'I', 'F', '8')) return "image/gif";

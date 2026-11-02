@@ -46,6 +46,14 @@ public interface MembershipRepository extends JpaRepository<Membership, Long>, J
             + "left join fetch membership.department where account.enabled = true order by account.displayName")
     List<Membership> findAllEnabled();
 
+    // 프로필 사진이 있는 구성원. [구성원 ID, 저장소 키]
+    @Query("select m.id, m.profileImageKey from Membership m where m.profileImageKey is not null")
+    List<Object[]> findProfileImageKeys();
+
+    // 첨부 청소가 프로필 사진 파일을 고아 파일로 지우지 않도록 확인
+    @Query("select m.profileImageKey from Membership m where m.profileImageKey in :keys")
+    List<String> findReferencedProfileImageKeys(@Param("keys") java.util.Collection<String> keys);
+
     // 관리자 모드를 켠 사용 중인 구성원 전체(문의하기 새 글 알림 대상). 관리자는 모든 회사 문의를 봄.
     @Query("select membership from Membership membership join fetch membership.userAccount account "
             + "where membership.adminMode = true and account.enabled = true")

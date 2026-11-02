@@ -75,6 +75,10 @@ public class Membership {
     @Column(name = "admin_mode", nullable = false)
     private boolean adminMode = true;
 
+    // 프로필 사진의 파일 저장소 키. NULL이면 이름 글자 아바타.
+    @Column(name = "profile_image_key", length = 200)
+    private String profileImageKey;
+
     // 구성원 생성 시간
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -139,6 +143,11 @@ public class Membership {
     // 지금 유효한 상태의 자동 해제 시각. 상태가 없거나 지났으면 null.
     public Instant currentStatusUntil() {
         return currentStatusType() == null ? null : statusUntil;
+    }
+
+    // 프로필 사진 바꾸기(null이면 기본 이미지로).
+    public void changeProfileImage(String key) {
+        this.profileImageKey = key;
     }
 
     // 관리자 모드 켜기·끄기.

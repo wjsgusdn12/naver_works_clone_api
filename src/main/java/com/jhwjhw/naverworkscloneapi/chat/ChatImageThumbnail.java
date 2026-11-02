@@ -22,7 +22,7 @@ import org.springframework.core.io.InputStreamSource;
 // 사진의 작은 사본(썸네일)과 휴대폰 사진의 회전 정보(EXIF Orientation)를 다룸. 자바 기본 ImageIO만 사용.
 // - 말풍선·모아보기는 썸네일, 크게 보기·내려받기는 원본(업무용이라 원본 화질은 그대로 보관).
 // - 큰 사진도 메모리에 통째로 펼치지 않도록 읽을 때부터 몇 픽셀씩 건너뛰며(subsampling) 줄여 읽음.
-final class ChatImageThumbnail {
+public final class ChatImageThumbnail {
     // 썸네일의 긴 변 최대 길이(px). 말풍선(최대 약 240px)을 고해상도 화면에서도 선명하게.
     static final int MAX_SIDE = 480;
     // 이보다 픽셀이 많은 사진은 썸네일을 만들지 않고 원본을 씀(압축 폭탄 같은 비정상 사진 방어).
@@ -156,7 +156,7 @@ final class ChatImageThumbnail {
 
     // JPEG 머리의 EXIF에서 회전값(1~8)을 읽음. 없거나 읽지 못하면 1(회전 없음).
     // 구조: FFD8 → [FFE1 길이 "Exif\0\0" + TIFF(II/MM, IFD0 위치) → 항목들 중 0x0112] ...
-    static int jpegOrientation(InputStreamSource file) {
+    public static int jpegOrientation(InputStreamSource file) {
         try (InputStream raw = file.getInputStream(); DataInputStream in = new DataInputStream(raw)) {
             if (in.readUnsignedShort() != 0xFFD8) return 1;
             while (true) {
