@@ -51,7 +51,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RequiredArgsConstructor
 public class BoardService {
     static final int PAGE_SIZE = 20;
-    static final int HOME_SIZE = 5;
+    static final int HOME_SIZE = 10;
     static final int PINNED_MAX = 20;
     static final Duration TRASH_KEEP = Duration.ofDays(30);
     static final int MAX_ATTACHMENTS = 30;
@@ -177,7 +177,7 @@ public class BoardService {
 
     // ---------- 목록 ----------
 
-    // 게시판 홈: 최신글·문의하기·공지사항·자유게시판 각 5개
+    // 게시판 홈: 최신글·문의하기·공지사항·자유게시판 각 10개(화면에서 좌우 2열로 5줄씩)
     @Transactional(readOnly = true)
     public BoardResponse.Home home(Long membershipId) {
         Viewer viewer = viewer(membershipId);
