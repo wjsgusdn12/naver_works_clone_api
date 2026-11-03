@@ -15,6 +15,12 @@ public interface BoardDailyGreetingRepository extends JpaRepository<BoardDailyGr
             + "order by g.greetingDate")
     List<BoardDailyGreeting> findReportPending();
 
+    // 글 목록 중 매일 자동 게시글(제목을 포인트 색으로 보여 줄 글)
+    @Query("select g.postId from BoardDailyGreeting g where g.postId in :postIds")
+    List<Long> findDailyPostIds(@Param("postIds") java.util.Collection<Long> postIds);
+
+    boolean existsByPostId(Long postId);
+
     // from 이후 날짜들, 오래된 날짜부터(예전 형식으로 채운 부분을 다시 만들 때 함께 봄)
     List<BoardDailyGreeting> findByGreetingDateGreaterThanEqualOrderByGreetingDate(LocalDate from);
 

@@ -21,10 +21,12 @@ public final class BoardResponse {
     // 목록의 글 한 줄. important: 내가 중요 표시(깃발)한 글. companyName: 그 게시판의 회사, read: 내가 읽었는지, hasFile: 아래 첨부 파일이 있는지,
     // answered: 문의하기 답변 완료, reactionCount: 이모지 리액션을 남긴 사람 수,
     // matchText: 파일·댓글 검색일 때 검색어와 맞은 파일 이름·댓글 내용(그 밖에는 null).
+    // daily: 매일 자동 게시글(증시 브리핑) — 화면이 제목을 포인트 색으로 그림.
     public record PostSummary(Long id, Long boardId, String boardName, BoardType boardType, String companyName,
             String title, String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
             boolean mustRead, boolean read, int viewCount, int commentCount, boolean hasFile, boolean answered,
-            Instant deletedAt, PostStatus status, Instant publishAt, int reactionCount, String matchText) {
+            Instant deletedAt, PostStatus status, Instant publishAt, int reactionCount, String matchText,
+            boolean daily) {
     }
 
     // 검색 결과 탭별 건수(게시글: 제목·본문, 작성자, 파일, 댓글)
@@ -60,7 +62,8 @@ public final class BoardResponse {
             boolean mustRead, int viewCount, Instant answeredAt, Instant deletedAt, long version,
             List<Attachment> attachments, List<Comment> comments, boolean canEdit, boolean canDelete,
             boolean canRestore, boolean canSeeReaders, boolean canComment, PostStatus status, Instant publishAt,
-            boolean allowComment, boolean commentNotify, List<Reaction> reactions, boolean canReact) {
+            boolean allowComment, boolean commentNotify, List<Reaction> reactions, boolean canReact,
+            boolean daily) {
     }
 
     // companyName: 공통 게시판은 여러 회사 사람이 섞이므로 함께 보여 줌

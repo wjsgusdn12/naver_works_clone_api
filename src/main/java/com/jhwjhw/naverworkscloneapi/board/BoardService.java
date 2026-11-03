@@ -12,6 +12,7 @@ import com.jhwjhw.naverworkscloneapi.board.domain.BoardType;
 import com.jhwjhw.naverworkscloneapi.board.domain.PostStatus;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardAttachmentRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardCommentRepository;
+import com.jhwjhw.naverworkscloneapi.board.repository.BoardDailyGreetingRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardFavoriteRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostImportantRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostReactionRepository;
@@ -85,6 +86,7 @@ public class BoardService {
     private final CompanyRepository companyRepository;
     private final DepartmentRepository departmentRepository;
     private final BoardContent content;
+    private final BoardDailyGreetingRepository dailyGreetingRepository;
     private final NotificationService notificationService;
     private final ChatAttachmentStore attachmentStore;
 
@@ -400,6 +402,7 @@ public class BoardService {
         Set<Long> marked = new HashSet<>(importantRepository.findMarkedPostIds(viewer.id(), postIds));
         Map<Long, Integer> reactionCounts = reactionRepository.countByPostIds(postIds).stream()
                 .collect(Collectors.toMap(row -> (Long) row[0], row -> ((Number) row[1]).intValue()));
+        Set<Long> daily = new HashSet<>(dailyGreetingRepository.findDailyPostIds(postIds));
         return posts.stream().map(post -> new BoardResponse.PostSummary(post.getId(), post.getBoard().getId(),
                 post.getBoard().getName(), post.getBoard().getType(),
                 post.getBoard().getType().common() ? "" : post.getBoard().getCompany().getName(),
@@ -408,7 +411,8 @@ public class BoardService {
                 marked.contains(post.getId()), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
                 post.getDeletedAt(), post.getStatus(), post.getPublishAt(),
-                reactionCounts.getOrDefault(post.getId(), 0), matchTexts.get(post.getId()))).toList();
+                reactionCounts.getOrDefault(post.getId(), 0), matchTexts.get(post.getId()),
+                daily.contains(post.getId()))).toList();
     }
 
     private static String preview(String text) {
@@ -460,7 +464,8 @@ public class BoardService {
                 author && !post.isDeleted(), !post.isDeleted() && (author || viewer.admin()),
                 canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
                 !post.isDeleted() && post.isPublished() && post.isAllowComment(), post.getStatus(), post.getPublishAt(),
-                post.isAllowComment(), post.isCommentNotify(), reactions(viewer, postId), live);
+                post.isAllowComment(), post.isCommentNotify(), reactions(viewer, postId), live,
+                dailyGreetingRepository.existsByPostId(postId));
     }
 
     // 댓글과 답글(오래된 순). 지운 댓글에 답글이 남아 있으면 그 자리를 "삭제된 댓글"로 남겨 답글이 떠다니지 않게 함.
