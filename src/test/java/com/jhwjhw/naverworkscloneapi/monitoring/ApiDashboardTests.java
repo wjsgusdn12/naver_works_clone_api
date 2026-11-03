@@ -44,6 +44,7 @@ class ApiDashboardTests {
     @Autowired private MembershipRepository memberships;
     @Autowired private ApiMetricHourlyRepository hourlyRepository;
     @Autowired private ApiMetricBucketRepository bucketRepository;
+    @Autowired private ApiPoolBucketRepository poolRepository;
 
     private Membership admin;
     private Membership user;
@@ -359,5 +360,28 @@ class ApiDashboardTests {
         assertThat(endpoints).doesNotContainKey(ApiMetricHourlyRepository.TOTAL);
         assertThat(hourlyRepository.readEndpointHours(hour, hour.plusSeconds(3600), java.util.List.of("GET /a")))
                 .singleElement().satisfies(row -> assertThat(row.durationSumMs()).isEqualTo(3040));
+    }
+
+    // DB 연결 풀 칸: 서버 두 대가 같은 칸에 쓰면 최대는 큰 쪽·합은 더하기, 같은 자리에 새 칸이 오면 덮어씀.
+    @Test
+    void poolBucketMergesServersAndOverwritesOldSlot() {
+        ApiPoolBucketRepository.Unit unit = ApiPoolBucketRepository.Unit.MINUTE;
+        long bucket = 1_000_000L;
+        poolRepository.add(unit, bucket, new ApiPoolBucketRepository.Cell(3, 6, 3, 0, 10));
+        poolRepository.add(unit, bucket, new ApiPoolBucketRepository.Cell(5, 4, 2, 1, 10));
+        ApiPoolBucketRepository.Cell merged = poolRepository.read(unit, bucket, bucket).get(bucket);
+        assertThat(merged.maxActive()).isEqualTo(5);
+        assertThat(merged.samples()).isEqualTo(5);
+        assertThat(merged.avgActive()).isEqualTo(2.0);
+        assertThat(merged.maxWaiting()).isEqualTo(1);
+
+        // 자리 수만큼 뒤의 칸은 같은 자리를 덮어씀(행이 늘지 않음)
+        long later = bucket + unit.slots;
+        poolRepository.add(unit, later, new ApiPoolBucketRepository.Cell(1, 1, 1, 0, 10));
+        assertThat(poolRepository.read(unit, bucket, bucket)).isEmpty();
+        assertThat(poolRepository.read(unit, later, later).get(later).maxActive()).isEqualTo(1);
+        // 늦게 도착한 옛 칸은 새 칸을 덮어쓰지 못함(같은 자리 UPDATE가 안 되고 INSERT는 중복이라 다시 UPDATE)
+        poolRepository.add(unit, bucket, new ApiPoolBucketRepository.Cell(9, 9, 1, 0, 10));
+        assertThat(poolRepository.read(unit, later, later).get(later).maxActive()).isEqualTo(1);
     }
 }

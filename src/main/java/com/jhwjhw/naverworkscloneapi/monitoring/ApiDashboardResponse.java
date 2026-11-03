@@ -7,7 +7,7 @@ import java.util.List;
 // mode: SHARED(서버 목록 통합, Redis) / LOCAL(서버 목록은 이 서버만, 로컬 개발). 요청 집계는 항상 DB 기준.
 // trend: HOUR 최근 60분 1분×60, DAY 최근 24시간 5분×288, WEEK 최근 7일 1시간×168, MONTH 최근 30일 1시간×720
 // previousSummary: 직전 같은 길이 기간(지금 창을 기간 길이만큼 앞으로 민 구간)의 합계. 숫자 카드 증감 표시용.
-// pool: 이 응답을 만든 서버의 DB 연결 풀(지금 값 + 최근 60분, 기간 탭과 무관).
+// pool: DB 연결 풀. 지금 값은 이 응답을 만든 서버, trend는 위 trend와 같은 칸별 기록(서버 중 가장 높은 값).
 public record ApiDashboardResponse(Instant generatedAt, String zone, String mode, String database,
         List<Server> servers, String range, Summary summary, Summary previousSummary, List<TrendPoint> trend,
         Ranking ranking, DbPoolMonitor.Snapshot pool) {

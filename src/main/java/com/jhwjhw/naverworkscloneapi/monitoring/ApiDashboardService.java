@@ -92,7 +92,18 @@ public class ApiDashboardService {
 
         MetricsBucket previous = previousTotal(range, period.trend().getFirst().startAt(), now);
         return new ApiDashboardResponse(now, zone.getId(), store.mode(), databaseStatus(), servers, range.name(),
-                summary(period.total()), summary(previous), period.trend(), period.ranking(), poolMonitor.snapshot());
+                summary(period.total()), summary(previous), period.trend(), period.ranking(),
+                poolMonitor.snapshot(poolUnit(range),
+                        period.trend().stream().map(ApiDashboardResponse.TrendPoint::startAt).toList()));
+    }
+
+    // DB 연결 풀 그래프 칸 길이: 요청 그래프와 같은 칸(1분·5분·1시간)
+    private static ApiPoolBucketRepository.Unit poolUnit(Range range) {
+        return switch (range) {
+            case HOUR -> ApiPoolBucketRepository.Unit.MINUTE;
+            case DAY -> ApiPoolBucketRepository.Unit.FIVE_MINUTES;
+            case WEEK, MONTH -> ApiPoolBucketRepository.Unit.HOUR;
+        };
     }
 
     // 한 기간의 계산 결과: 숫자 카드용 합계, 그래프 점, 순위.
