@@ -24,8 +24,11 @@ public class BoardContent {
 
     // 블록 노드(앞뒤로 줄을 바꿔 글자를 뽑음)와 줄 안 노드
     private static final Set<String> BLOCKS = Set.of("paragraph", "heading", "bulletList", "orderedList", "listItem",
-            "blockquote", "codeBlock", "horizontalRule", "image");
+            "blockquote", "codeBlock", "horizontalRule", "image", "table", "tableRow");
     private static final Set<String> SIMPLE_MARKS = Set.of("bold", "italic", "strike", "code", "underline");
+    // 표 칸 정렬과 글자 색 서식(tone)은 정해 둔 값만 남김(임의의 CSS 색·스타일은 받지 않음)
+    private static final Set<String> CELL_ALIGNS = Set.of("left", "center", "right");
+    private static final Set<String> TONES = Set.of("up", "down", "muted");
 
     private final ObjectMapper objectMapper;
 
@@ -80,7 +83,12 @@ public class BoardContent {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("type", type);
         switch (type) {
-            case "doc", "paragraph", "bulletList", "listItem", "blockquote" -> {
+            case "doc", "paragraph", "bulletList", "listItem", "blockquote", "table", "tableRow" -> {
+            }
+            case "tableHeader", "tableCell" -> {
+                if (attrs(source).get("align") instanceof String align && CELL_ALIGNS.contains(align)) {
+                    result.put("attrs", Map.of("align", align));
+                }
             }
             case "heading" -> {
                 int level = intAttr(source, "level", 1);
@@ -130,6 +138,8 @@ public class BoardContent {
             if (!sanitized.isEmpty()) result.put("content", sanitized);
         }
         if (BLOCKS.contains(type)) state.text.append('\n');
+        // 표 칸 사이는 띄어쓰기 하나(검색·미리보기 글자에서 칸 내용이 붙지 않게)
+        if (type.equals("tableHeader") || type.equals("tableCell")) state.text.append(' ');
         return result;
     }
 
@@ -141,6 +151,10 @@ public class BoardContent {
             if (!(item instanceof Map<?, ?> mark) || !(mark.get("type") instanceof String type)) continue;
             if (SIMPLE_MARKS.contains(type)) {
                 result.add(Map.of("type", type));
+            } else if ("tone".equals(type)) {
+                if (attrs(mark).get("tone") instanceof String tone && TONES.contains(tone)) {
+                    result.add(Map.of("type", "tone", "attrs", Map.of("tone", tone)));
+                }
             } else if ("link".equals(type)) {
                 Object href = attrs(mark).get("href");
                 if (href instanceof String value && safeHref(value)) {
