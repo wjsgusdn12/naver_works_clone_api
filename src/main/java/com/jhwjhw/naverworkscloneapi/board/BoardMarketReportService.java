@@ -5,6 +5,7 @@ import com.jhwjhw.naverworkscloneapi.board.market.KoreaMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.market.MarketHttp;
 import com.jhwjhw.naverworkscloneapi.board.market.MarketReportBuilder;
 import com.jhwjhw.naverworkscloneapi.board.market.NewsClient;
+import com.jhwjhw.naverworkscloneapi.board.market.YahooMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.market.UsMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.market.UsMarketClient.DailyBar;
 import com.jhwjhw.naverworkscloneapi.board.market.UsMarketClient.Movers;
@@ -58,6 +59,8 @@ public class BoardMarketReportService {
     private final TransactionTemplate tx;
     private final KoreaMarketClient korea;
     private final UsMarketClient us;
+    // 미국 일별 시세는 Yahoo가 먼저(한도 없음), 막히면 Alpha Vantage. 급등·급락은 Alpha Vantage만.
+    private final YahooMarketClient yahoo;
     private final NewsClient news;
     private final ZoneId zone;
     private final LocalTime koreaAt;
@@ -78,22 +81,39 @@ public class BoardMarketReportService {
             @Value("${app.market.data-go-kr-key:}") String dataGoKrKey,
             @Value("${app.market.alpha-vantage-key:}") String alphaVantageKey,
             @Value("${app.market.news-enabled:true}") boolean newsEnabled,
+            @Value("${app.market.yahoo-enabled:true}") boolean yahooEnabled,
             @Value("${app.market.korea-time:14:00}") String koreaAt,
             @Value("${app.monitoring.zone:Asia/Seoul}") String zone) {
         this(greetingRepository, postRepository, content, objectMapper, transactionManager,
                 enabled && !dataGoKrKey.isBlank()
                         ? new KoreaMarketClient(MarketHttp.jdk(), objectMapper, dataGoKrKey.strip()) : null,
                 enabled && !alphaVantageKey.isBlank()
-                        ? new UsMarketClient(MarketHttp.jdk(), objectMapper, alphaVantageKey.strip(),
-                                Duration.ofSeconds(13))
+                        ? new UsMarketClient(cached(MarketHttp.jdk(), "alphavantage", ZoneId.of(zone),
+                                body -> !body.contains("\"Information\"") && !body.contains("\"Note\"")
+                                        && !body.contains("\"Error Message\"")),
+                                objectMapper, alphaVantageKey.strip(), Duration.ofSeconds(13))
+                        : null,
+                enabled && yahooEnabled
+                        ? new YahooMarketClient(cached(MarketHttp.jdk(), "yahoo", ZoneId.of(zone),
+                                body -> body.contains("\"timestamp\"")), objectMapper)
                         : null,
                 enabled && newsEnabled ? new NewsClient(MarketHttp.jdk()) : null,
                 LocalTime.parse(koreaAt), ZoneId.of(zone), Clock.systemUTC());
     }
 
+    // 하루 보관 폴더: 시스템 임시 폴더 아래(서버가 다시 켜져도 남음, git·uploads와 무관)
+    private static MarketHttp cached(MarketHttp inner, String name, ZoneId zone,
+            java.util.function.Predicate<String> keep) {
+        java.nio.file.Path root = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
+                "naverworks-market-cache", name);
+        return MarketHttp.dailyFileCache(inner, root, () -> LocalDate.now(zone), keep);
+    }
+
     BoardMarketReportService(BoardDailyGreetingRepository greetingRepository, BoardPostRepository postRepository,
             BoardContent content, ObjectMapper objectMapper, PlatformTransactionManager transactionManager,
-            KoreaMarketClient korea, UsMarketClient us, NewsClient news, LocalTime koreaAt, ZoneId zone, Clock clock) {
+            KoreaMarketClient korea, UsMarketClient us, YahooMarketClient yahoo, NewsClient news,
+            LocalTime koreaAt, ZoneId zone, Clock clock) {
+        this.yahoo = yahoo;
         this.news = news;
         this.greetingRepository = greetingRepository;
         this.postRepository = postRepository;
@@ -108,7 +128,7 @@ public class BoardMarketReportService {
     }
 
     public boolean usEnabled() {
-        return us != null;
+        return us != null || yahoo != null;
     }
 
     public boolean krEnabled() {
@@ -270,7 +290,6 @@ public class BoardMarketReportService {
 
     private Optional<List<Map<String, Object>>> buildUs(LocalDate date, ZonedDateTime now) throws IOException {
         resetCacheIfNewDay(now.toLocalDate());
-        if (usLimitReached) return Optional.empty();
         List<DailyBar> spy = series("SPY");
         Optional<LocalDate> basis = spy.stream().map(DailyBar::date).filter(day -> day.isBefore(date)).findFirst();
         if (basis.isEmpty()) return Optional.empty();
@@ -294,13 +313,14 @@ public class BoardMarketReportService {
             }
         }
         Movers movers = null;
-        // 급등·급락은 최신 거래일 것만 있음
-        if (!spy.isEmpty() && spy.getFirst().date().equals(basis.get())) {
+        // 급등·급락은 Alpha Vantage에만 있고 최신 거래일 것만 있음. 못 받아도 나머지로 만듦(급등·급락 카드만 빠짐).
+        if (us != null && !usLimitReached && !spy.isEmpty() && spy.getFirst().date().equals(basis.get())) {
             try {
                 if (moversCache == null) moversCache = us.movers();
                 movers = moversCache;
             } catch (UsMarketClient.LimitReachedException exception) {
-                throw exception;
+                usLimitReached = true;
+                log.warn("Market report US movers skipped: Alpha Vantage daily limit reached.");
             } catch (IOException exception) {
                 log.warn("Market report US movers skipped. reason={}", exception.getMessage());
             }
@@ -308,10 +328,30 @@ public class BoardMarketReportService {
         return MarketReportBuilder.usSection(basis.get(), all, movers);
     }
 
+    // 일별 시세: Yahoo 먼저, 안 되면 Alpha Vantage(하루 한도가 남아 있을 때)
     private List<DailyBar> series(String symbol) throws IOException {
         List<DailyBar> cached = seriesCache.get(symbol);
         if (cached != null) return cached;
-        List<DailyBar> bars = us.daily(symbol);
+        List<DailyBar> bars = null;
+        IOException failure = null;
+        if (yahoo != null) {
+            try {
+                bars = yahoo.daily(symbol);
+            } catch (IOException exception) {
+                failure = exception;
+                log.warn("Market report Yahoo failed, trying Alpha Vantage. symbol={} reason={}", symbol,
+                        exception.getMessage());
+            }
+        }
+        if (bars == null && us != null && !usLimitReached) {
+            try {
+                bars = us.daily(symbol);
+            } catch (UsMarketClient.LimitReachedException exception) {
+                usLimitReached = true;
+                throw exception;
+            }
+        }
+        if (bars == null) throw failure != null ? failure : new IOException("No US price source for " + symbol);
         seriesCache.put(symbol, bars);
         return bars;
     }

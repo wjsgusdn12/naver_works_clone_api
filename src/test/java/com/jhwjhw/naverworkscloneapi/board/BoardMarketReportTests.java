@@ -7,6 +7,7 @@ import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
 import com.jhwjhw.naverworkscloneapi.board.market.KoreaMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.market.MarketHttp;
 import com.jhwjhw.naverworkscloneapi.board.market.NewsClient;
+import com.jhwjhw.naverworkscloneapi.board.market.YahooMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.market.UsMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardDailyGreetingRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostRepository;
@@ -86,7 +87,7 @@ class BoardMarketReportTests {
         };
         return new BoardMarketReportService(greetings, posts, content, objectMapper, transactionManager,
                 new KoreaMarketClient(http, objectMapper, "fake-key"),
-                new UsMarketClient(http, objectMapper, "fake-key", Duration.ZERO), new NewsClient(http),
+                new UsMarketClient(http, objectMapper, "fake-key", Duration.ZERO), null, new NewsClient(http),
                 LocalTime.of(14, 0), SEOUL,
                 Clock.fixed(now.toInstant(), SEOUL));
     }
@@ -166,6 +167,21 @@ class BoardMarketReportTests {
         assertThat(greeting.getUsDoneAt()).isNotNull();
         assertThat(posts.findById(greeting.getPostId()).orElseThrow().getContentText())
                 .contains("미국 증시 데이터를 받지 못해");
+    }
+
+    @Test
+    void readsYahooDailyCloses() throws Exception {
+        // 2026-10-30·11-02 장 시작(뉴욕 9:30) 시각, 중간에 빈 값(null) 하나
+        String body = """
+                {"chart": {"result": [{"timestamp": [1793367000, 1793450000, 1793629800],
+                  "indicators": {"quote": [{"close": [755.72, null, 752.1], "volume": [77696500, null, 50668800]}]}}],
+                  "error": null}}
+                """;
+        var bars = new YahooMarketClient(uri -> body, objectMapper).daily("SPY");
+        assertThat(bars).hasSize(2);
+        assertThat(bars.getFirst().date()).isEqualTo(LocalDate.of(2026, 11, 2));
+        assertThat(bars.getFirst().close()).isEqualByComparingTo("752.1");
+        assertThat(bars.getLast().date()).isEqualTo(LocalDate.of(2026, 10, 30));
     }
 
     private static String param(String query, String name) {
