@@ -83,9 +83,10 @@ public class KoreaMarketClient {
             params.put("numOfRows", "5");
             for (Map<String, Object> item : items(INDEX_URL, params)) {
                 if (!name.equals(text(item.get("idxNm")))) continue;
+                // 52주 최고·최저가 "0"으로 오는 날이 있어(실제 응답 확인) 0 이하는 없는 값으로 봄
                 result.add(new IndexQuote(date, name, number(item.get("clpr")), number(item.get("vs")),
-                        number(item.get("fltRt")), number(item.get("trPrc")), number(item.get("yrWRcrdHgst")),
-                        number(item.get("yrWRcrdLwst"))));
+                        number(item.get("fltRt")), number(item.get("trPrc")), positive(item.get("yrWRcrdHgst")),
+                        positive(item.get("yrWRcrdLwst"))));
                 break;
             }
         }
@@ -170,6 +171,11 @@ public class KoreaMarketClient {
         } catch (NumberFormatException exception) {
             return null;
         }
+    }
+
+    private static BigDecimal positive(Object value) {
+        BigDecimal number = number(value);
+        return number != null && number.signum() > 0 ? number : null;
     }
 
     private static LocalDate date(Object value) {

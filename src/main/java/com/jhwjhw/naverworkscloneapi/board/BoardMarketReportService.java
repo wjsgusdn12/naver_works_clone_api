@@ -41,7 +41,8 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 @Slf4j
 public class BoardMarketReportService {
-    private static final Duration LEASE = Duration.ofMinutes(20);
+    // 한 번 작업은 3분쯤(미국 12번 × 13초 간격). 개발 중 자동 재시작으로 작업이 끊기면 이 시간이 지나야 다시 잡을 수 있어 짧게.
+    private static final Duration LEASE = Duration.ofMinutes(6);
     // 이 날짜 수보다 오래 못 받은 부분은 "받지 못함"으로 끝냄
     private static final int GIVE_UP_DAYS = 7;
     private static final TypeReference<List<Map<String, Object>>> NODES = new TypeReference<>() {
@@ -134,6 +135,7 @@ public class BoardMarketReportService {
         List<BoardDailyGreeting> due = tx.execute(status -> greetingRepository.findReportPending()).stream()
                 .filter(greeting -> needsUs(greeting) || krDue(greeting, now)).toList();
         if (due.isEmpty()) return;
+        log.info("Market report run started. due={}", due.stream().map(BoardDailyGreeting::getGreetingDate).toList());
         // 가장 오래된 날짜 행을 이번 작업의 자물쇠로 씀. 다른 서버가 잡고 있으면 이번에는 쉼.
         List<LocalDate> claimed = new ArrayList<>();
         try {
@@ -142,6 +144,8 @@ public class BoardMarketReportService {
                 Integer won = tx.execute(status -> greetingRepository.claim(greeting.getGreetingDate(), at,
                         at.plus(LEASE)));
                 if (won == null || won == 0) {
+                    log.info("Market report waiting: {} is held by another run (until lease expires, max {} min).",
+                            greeting.getGreetingDate(), LEASE.toMinutes());
                     if (claimed.isEmpty()) return;
                     continue;
                 }
@@ -175,7 +179,10 @@ public class BoardMarketReportService {
             krSection = attempt("KR", date, () -> buildKr(date, now));
             if (krSection == null && giveUp) krSection = json(MarketReportBuilder.unavailable("한국"));
         }
-        if (usSection == null && krSection == null) return;
+        if (usSection == null && krSection == null) {
+            log.info("Market report not ready yet. date={} (will retry in 5 min)", date);
+            return;
+        }
         String finalUs = usSection;
         String finalKr = krSection;
         tx.executeWithoutResult(status -> save(date, finalUs, finalKr));
