@@ -75,6 +75,8 @@ class BoardMarketReportTests {
             calls.incrementAndGet();
             if (uri.getHost().contains("yna.co.kr")) return uri.getPath().contains("economy") ? YNA_ECONOMY : YNA_ALL;
             if (uri.getHost().contains("news.google.com")) return GOOGLE;
+            if (uri.getHost().contains("sbs.co.kr")) return SBS;
+            if (uri.getHost().contains("mk.co.kr")) throw new java.io.IOException("가상 차단");
             String query = URLDecoder.decode(uri.getRawQuery(), StandardCharsets.UTF_8);
             if (uri.getHost().contains("alphavantage")) {
                 return query.contains("TOP_GAINERS_LOSERS") ? MOVERS : daily(param(query, "symbol"));
@@ -115,7 +117,8 @@ class BoardMarketReportTests {
                 // 뉴스: 사진 기사·중복·연합뉴스 중복 출처는 빠지고, 구글 제목 끝 언론사는 떼어 냄
                 .contains("오늘의 주요 뉴스").contains("가상 반도체 수출 사상 최대").contains("가상 환율 1,300원대")
                 .contains("가상경제신문").contains("가상 반도체 수출이 한 달 만에 사상 최대를 기록했다.")
-                .doesNotContain("홍길동 기자").contains("가상 원화 약세 이어져").contains("가상일보").doesNotContain("[포토]").doesNotContain("- 가상경제신문 ");
+                .doesNotContain("홍길동 기자").contains("가상 국무회의 열려")
+                .contains("가상 대통령은 오늘 \"가상 시장이 안정되고 있다\"고 말했습니다.").doesNotContain("발언하고 있다").contains("가상 원화 약세 이어져").contains("가상일보").doesNotContain("[포토]").doesNotContain("- 가상경제신문 ");
         assertThat(morning.getNewsDoneAt()).isNotNull();
         assertThat(post.getContentJson()).contains("\"type\":\"marketNews\"").contains("https://example.com/news/1")
                 .doesNotContain("\"format\"").contains("\"type\":\"marketHero\"").contains("\"type\":\"marketStats\"")
@@ -233,6 +236,15 @@ class BoardMarketReportTests {
               <pubDate>Tue, 3 Nov 2026 08:00:00 +0900</pubDate></item>
             <item><title><![CDATA[가상 오래된 기사]]></title><link>https://example.com/news/old</link>
               <pubDate>Sun, 1 Nov 2026 08:00:00 +0900</pubDate></item>
+            </channel></rss>
+            """;
+
+    private static final String SBS = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0"><channel>
+            <item><title><![CDATA[가상 국무회의 열려]]></title><link>https://example.com/news/sbs1</link>
+              <description><![CDATA[&#9650; 가상 대통령이 발언하고 있다.가상 대통령은 오늘 &#34;가상 시장이 안정되고 있다&#34;고 말했습니다. 둘째 문장입니다.]]></description>
+              <pubDate>Tue, 3 Nov 2026 08:10:00 +0900</pubDate></item>
             </channel></rss>
             """;
 

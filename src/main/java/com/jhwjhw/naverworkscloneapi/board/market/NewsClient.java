@@ -26,6 +26,12 @@ public class NewsClient {
     // 연합뉴스 RSS는 최신순이라(중요도 순 피드 없음) 시장 관련 낱말이 든 기사만 고르고,
     // "주요"·"경제"는 중요도 순으로 정렬된 Google 뉴스 머리기사를 씀.
     static final String YNA_ECONOMY = "https://www.yna.co.kr/rss/economy.xml";
+    // SBS 뉴스 편집 헤드라인(15건)·매일경제 헤드라인: 설명란에 본문 앞부분이 와서 요약으로 씀
+    static final String SBS_HEADLINE = "https://news.sbs.co.kr/news/headlineRssFeed.do?plink=RSSREADER";
+    static final String MK_HEADLINE = "https://www.mk.co.kr/rss/30100041/";
+    // 사진 기사 설명 끝: "2026.11.3 [홍길동기자]"
+    private static final java.util.regex.Pattern PHOTO_CREDIT = java.util.regex.Pattern.compile(
+            "\\d{4}\\.\\d{1,2}\\.\\d{1,2}\\s*\\[[^\\]]{1,20}기자\\]\\s*$");
     static final String GOOGLE_TOP = "https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko";
     static final String GOOGLE_BUSINESS =
             "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=ko&gl=KR&ceid=KR:ko";
@@ -63,8 +69,11 @@ public class NewsClient {
     public List<Article> headlines(ZonedDateTime since) {
         List<Article> result = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        pick(result, seen, fetch(GOOGLE_TOP, "주요", null), since, 4, false);
-        pick(result, seen, fetch(GOOGLE_BUSINESS, "경제", null), since, 4, false);
+        // 요약(본문 앞부분)이 함께 오는 언론사 헤드라인 RSS를 먼저, 막히면 Google 뉴스(요약 없음)로 대신
+        List<Article> top = fetch(SBS_HEADLINE, "주요", "SBS");
+        pick(result, seen, top.isEmpty() ? fetch(GOOGLE_TOP, "주요", null) : top, since, 4, false);
+        List<Article> economy = fetch(MK_HEADLINE, "경제", "매일경제");
+        pick(result, seen, economy.isEmpty() ? fetch(GOOGLE_BUSINESS, "경제", null) : economy, since, 4, false);
         pick(result, seen, fetch(YNA_ECONOMY, "시장", "연합뉴스"), since, 2, true);
         return result;
     }
@@ -135,8 +144,10 @@ public class NewsClient {
                     related.add(new Related(relatedTitle, relatedSource, matcher.group(1)));
                 }
             } else if (description != null) {
-                summary = BYLINE.matcher(unescape(strip(description))).replaceFirst("").strip();
-                if (summary.isEmpty() || summary.equals(title)) summary = null;
+                // 사진 한 장과 설명만 있는 기사는 메인 뉴스로 보기 어려워 뺌
+                if (PHOTO_CREDIT.matcher(unescape(strip(description))).find()) continue;
+                summary = summarize(description);
+                if (summary == null || summary.equals(title)) summary = null;
             }
             result.add(new Article(category, title, source == null ? "" : source, link, date(child(item, "pubDate")),
                     summary, related));
@@ -144,13 +155,62 @@ public class NewsClient {
         return result;
     }
 
+    private static final int SUMMARY_MAX = 240;
+
+    // 설명란(본문 앞부분) → 요약: 태그·기자 이름·사진 설명을 떼고 앞 두세 문장(최대 240자)만
+    static String summarize(String description) {
+        String text = unescape(strip(description));
+        text = BYLINE.matcher(text).replaceFirst("");
+        // 문장 끝(다. 요. 음.) 뒤에 띄어쓰기가 빠진 경우를 띄워 줌
+        text = text.replaceAll("(다|요|음)\\.(?=\\S)", "$1. ");
+        if (text.startsWith("▲") || text.startsWith("△")) {
+            // 맨 앞 사진 설명: "▲ 발언하는 모습이다." 처럼 짧게 끝나면 그 문장만, 마침표 없이 본문 첫 문장과
+            // 붙어 있으면(경계를 알 수 없음) 첫 문장째 뺌
+            java.util.regex.Matcher first = java.util.regex.Pattern.compile("^.*?[다요음]\\.\\s*").matcher(text);
+            int photo = text.indexOf("자료사진");
+            if (photo >= 0 && photo < 60) text = text.substring(photo + "자료사진".length());
+            else if (first.find()) text = text.substring(first.end());
+            // 설명과 본문의 경계를 알 수 없으면 엉킨 문장을 보여 주지 않고 요약 없이
+            else return null;
+        }
+        text = text.strip();
+        if (text.isEmpty()) return null;
+        StringBuilder summary = new StringBuilder();
+        for (String sentence : text.split("(?<=[다요음]\\.)\\s+")) {
+            if (summary.length() + sentence.length() > SUMMARY_MAX) break;
+            summary.append(sentence).append(' ');
+            if (summary.length() >= 120) break;
+        }
+        String result = summary.toString().strip();
+        if (result.isEmpty()) result = text.substring(0, Math.min(SUMMARY_MAX, text.length())).strip() + "…";
+        return result.replaceAll("\\.{2,}$", "…");
+    }
+
     private static String strip(String html) {
         return html.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ").strip();
     }
 
+    private static final java.util.regex.Pattern NUMERIC_ENTITY = java.util.regex.Pattern.compile("&#(x?)([0-9a-fA-F]{1,6});");
+
     private static String unescape(String text) {
-        return text.replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<")
-                .replace("&gt;", ">").replace("&amp;", "&").strip();
+        String named = text.replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&middot;", "·").replace("&hellip;", "…");
+        // &#34; &#9650; 같은 숫자 문자 참조
+        java.util.regex.Matcher matcher = NUMERIC_ENTITY.matcher(named);
+        StringBuilder result = new StringBuilder();
+        while (matcher.find()) {
+            int code;
+            try {
+                code = Integer.parseInt(matcher.group(2), matcher.group(1).isEmpty() ? 10 : 16);
+            } catch (NumberFormatException exception) {
+                code = -1;
+            }
+            String replacement = code > 0 && Character.isValidCodePoint(code) && !Character.isISOControl(code)
+                    ? new String(Character.toChars(code)) : " ";
+            matcher.appendReplacement(result, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(result);
+        return result.toString().replace("&amp;", "&").replaceAll("\\s+", " ").strip();
     }
 
     private static String child(Element item, String name) {
@@ -165,8 +225,10 @@ public class NewsClient {
 
     private static ZonedDateTime date(String value) {
         if (value == null) return null;
+        // "+09:00"처럼 시차에 콜론이 든 형식(매일경제)도 RFC 1123 꼴("+0900")로 맞춤
+        String normalized = value.strip().replaceAll("([+-]\\d{2}):(\\d{2})$", "$1$2");
         try {
-            return ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME.withLocale(Locale.ENGLISH));
+            return ZonedDateTime.parse(normalized, DateTimeFormatter.RFC_1123_DATE_TIME.withLocale(Locale.ENGLISH));
         } catch (RuntimeException exception) {
             return null;
         }
