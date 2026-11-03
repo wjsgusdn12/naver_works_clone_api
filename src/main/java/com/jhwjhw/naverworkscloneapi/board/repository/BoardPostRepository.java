@@ -17,14 +17,20 @@ import org.springframework.data.repository.query.Param;
 public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     // 검색어 조건: search가 false면 적용하지 않음. keyword는 소문자 like 패턴, scope는 찾을 곳
     // (ALL: 제목·본문·글쓴이, POST: 제목·본문, AUTHOR: 글쓴이 이름, FILE: 첨부 파일 이름, COMMENT: 지우지 않은 댓글).
+    // field는 제목·본문 중 찾을 칸(ALL·TITLE·CONTENT). 검색 필터: 등록 시각 from 이상 to 미만,
+    // fileOnly면 첨부 파일(본문 안 그림 제외)이 있는 글만. 필터를 안 쓰면 from·to는 아주 이른·늦은 시각.
     String SEARCH = "and (:search = false "
-            + "or ((:scope = 'ALL' or :scope = 'POST') and (lower(p.title) like :keyword escape '\\' "
-            + "or lower(p.contentText) like :keyword escape '\\')) "
+            + "or ((:scope = 'ALL' or :scope = 'POST') "
+            + "and ((:field <> 'CONTENT' and lower(p.title) like :keyword escape '\\') "
+            + "or (:field <> 'TITLE' and lower(p.contentText) like :keyword escape '\\'))) "
             + "or ((:scope = 'ALL' or :scope = 'AUTHOR') and lower(u.displayName) like :keyword escape '\\') "
             + "or (:scope = 'FILE' and exists (select f.id from BoardAttachment f where f.post = p "
             + "and f.inlineImage = false and lower(f.originalName) like :keyword escape '\\')) "
             + "or (:scope = 'COMMENT' and exists (select c.id from BoardComment c where c.post = p "
-            + "and c.deletedAt is null and lower(c.content) like :keyword escape '\\'))) ";
+            + "and c.deletedAt is null and lower(c.content) like :keyword escape '\\'))) "
+            + "and p.createdAt >= :from and p.createdAt < :to "
+            + "and (:fileOnly = false or exists (select f2.id from BoardAttachment f2 where f2.post = p "
+            + "and f2.inlineImage = false)) ";
 
     // 목록·검색은 등록된 글만(임시저장·예약 글은 쓴 사람의 임시저장함·예약함에서만)
     String PUBLISHED = "and p.status = com.jhwjhw.naverworkscloneapi.board.domain.PostStatus.PUBLISHED ";
@@ -53,7 +59,9 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
             @Param("mine") boolean mine,
             @Param("unread") boolean unread, @Param("search") boolean search, @Param("keyword") String keyword,
-            @Param("scope") String scope, @Param("activity") boolean activity, Pageable pageable);
+            @Param("scope") String scope, @Param("field") String field, @Param("from") Instant from,
+            @Param("to") Instant to, @Param("fileOnly") boolean fileOnly, @Param("activity") boolean activity,
+            Pageable pageable);
 
     // 검색 결과 탭의 건수(목록과 같은 조건, 글은 가져오지 않음)
     @Query("select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u " + PAGE_WHERE)
@@ -62,7 +70,8 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
             @Param("mine") boolean mine,
             @Param("unread") boolean unread, @Param("search") boolean search, @Param("keyword") String keyword,
-            @Param("scope") String scope);
+            @Param("scope") String scope, @Param("field") String field, @Param("from") Instant from,
+            @Param("to") Instant to, @Param("fileOnly") boolean fileOnly);
 
     String TRASH_WHERE = "where b.id in :boardIds and p.deletedAt is not null and p.deletedAt > :since " + PUBLISHED
             + "and (:admin = true or p.deletedBy.id = :me) " + SEARCH;
@@ -74,7 +83,9 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
                     + TRASH_WHERE)
     Page<BoardPost> findTrash(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("since") Instant since, @Param("search") boolean search,
-            @Param("keyword") String keyword, @Param("scope") String scope, Pageable pageable);
+            @Param("keyword") String keyword, @Param("scope") String scope, @Param("field") String field,
+            @Param("from") Instant from, @Param("to") Instant to, @Param("fileOnly") boolean fileOnly,
+            Pageable pageable);
 
     @Query("select p from BoardPost p join fetch p.board b join fetch b.company left join fetch b.department "
             + "join fetch p.author a join fetch a.userAccount left join fetch a.department where p.id = :id")

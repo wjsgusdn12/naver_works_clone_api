@@ -275,12 +275,20 @@ public class BoardService {
     @Transactional(readOnly = true)
     public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
             String keyword, ListOptions options, SearchScope searchScope) {
+        return list(membershipId, view, boardId, type, page, keyword, options, searchScope, SearchFilter.NONE);
+    }
+
+    // filter: 검색할 때만 쓰는 검색 필터(검색 위치·기간·첨부 여부·최신글 검색의 게시판).
+    @Transactional(readOnly = true)
+    public BoardResponse.PostPage list(Long membershipId, View view, Long boardId, BoardType type, Integer page,
+            String keyword, ListOptions options, SearchScope searchScope, SearchFilter filter) {
         Viewer viewer = viewer(membershipId);
         int pageIndex = page == null ? 0 : Math.max(page, 0);
         int size = options.size();
         String trimmed = trimKeyword(keyword);
         Search search = new Search(!trimmed.isEmpty(), likePattern(trimmed),
-                searchScope == null ? SearchScope.ALL : searchScope, trimmed);
+                searchScope == null ? SearchScope.ALL : searchScope, trimmed,
+                trimmed.isEmpty() || filter == null ? SearchFilter.NONE : filter);
         if (view == View.BOARD || view == View.TYPE) {
             List<Long> scope;
             if (view == View.BOARD) {
@@ -306,22 +314,63 @@ public class BoardService {
         if (view == View.TRASH) {
             Page<BoardPost> rows = boardIds.isEmpty() ? Page.empty(PageRequest.of(pageIndex, size))
                     : postRepository.findTrash(boardIds, viewer.id(), viewer.admin(), Instant.now().minus(TRASH_KEEP),
-                            search.on(), search.pattern(), search.scope().name(), PageRequest.of(pageIndex, size));
+                            search.on(), search.pattern(), search.scope().name(), search.filter().field().name(),
+                            search.filter().fromOrMin(), search.filter().toOrMax(), search.filter().fileOnly(),
+                            PageRequest.of(pageIndex, size));
             return page(viewer, List.of(), rows, search);
         }
+        // 최신글 검색에서 게시판을 고르면 그 게시판만(볼 수 있는 게시판인지 확인)
+        if (view == View.LATEST && search.on()) boardIds = searchBoardIds(viewer, boardIds, search.filter());
         return page(viewer, List.of(), find(viewer, boardIds, view == View.MUST_READ, view == View.IMPORTANT,
                 view == View.MINE, search, options, pageIndex, size), search);
     }
 
     // on이 false면 검색하지 않음. pattern은 like에 바로 넣는 소문자 "%검색어%"(%·_·\는 글자 그대로 찾게 이스케이프).
     // keyword는 다듬은 검색어 그대로(미리보기를 검색어 둘레로 자를 때 씀).
-    private record Search(boolean on, String pattern, SearchScope scope, String keyword) {
-        static final Search NONE = new Search(false, "", SearchScope.ALL, "");
+    private record Search(boolean on, String pattern, SearchScope scope, String keyword, SearchFilter filter) {
+        static final Search NONE = new Search(false, "", SearchScope.ALL, "", SearchFilter.NONE);
 
         // 제목·본문에서 찾는 검색이면 미리보기를 검색어 둘레로
         String previewKeyword() {
             return on && (scope == SearchScope.ALL || scope == SearchScope.POST) ? keyword : null;
         }
+    }
+
+    // 제목·본문 중 찾을 칸(검색 필터의 검색 위치)
+    public enum SearchField {
+        ALL, TITLE, CONTENT
+    }
+
+    // 필터 기간을 안 정했을 때 쓰는 아주 이른·늦은 시각(쿼리에 null을 넘기지 않으려고)
+    static final Instant FILTER_MIN = Instant.parse("1970-01-01T00:00:00Z");
+    static final Instant FILTER_MAX = Instant.parse("9999-01-01T00:00:00Z");
+
+    // 검색 필터. field: 제목·본문 중 찾을 칸, from 이상 to 미만에 등록된 글(null이면 끝 없음),
+    // fileOnly: 첨부 파일이 있는 글만, boardId: 최신글 검색을 이 게시판으로 좁힘(null이면 전체).
+    public record SearchFilter(SearchField field, Instant from, Instant to, boolean fileOnly, Long boardId) {
+        public static final SearchFilter NONE = new SearchFilter(SearchField.ALL, null, null, false, null);
+
+        public SearchFilter {
+            if (field == null) field = SearchField.ALL;
+            if (from != null && to != null && from.isAfter(to)) {
+                throw new BoardException("SEARCH_PERIOD_INVALID", "검색 기간의 시작이 끝보다 늦습니다.");
+            }
+        }
+
+        Instant fromOrMin() {
+            return from == null ? FILTER_MIN : from;
+        }
+
+        Instant toOrMax() {
+            return to == null ? FILTER_MAX : to;
+        }
+    }
+
+    // 최신글 검색의 게시판 좁히기. 공통 게시판은 그 종류 전체(예전에 회사마다 만든 것까지).
+    private List<Long> searchBoardIds(Viewer viewer, List<Long> visible, SearchFilter filter) {
+        if (filter.boardId() == null) return visible;
+        Board board = viewableBoard(viewer, filter.boardId());
+        return board.getType().common() ? ofType(visibleBoards(viewer), board.getType()) : List.of(board.getId());
     }
 
     // 검색할 곳. ALL: 제목·본문·글쓴이(게시판 안 검색·휴지통), 나머지는 검색 결과 화면의 탭.
@@ -337,13 +386,22 @@ public class BoardService {
     // 검색 결과 화면 탭별 건수. 최신글과 같은 범위(볼 수 있는 게시판 전체)에서 셈.
     @Transactional(readOnly = true)
     public BoardResponse.SearchCounts searchCounts(Long membershipId, String keyword) {
+        return searchCounts(membershipId, keyword, SearchFilter.NONE);
+    }
+
+    // 목록과 같은 검색 필터를 적용한 탭별 건수
+    @Transactional(readOnly = true)
+    public BoardResponse.SearchCounts searchCounts(Long membershipId, String keyword, SearchFilter filter) {
         Viewer viewer = viewer(membershipId);
         String trimmed = trimKeyword(keyword);
-        List<Long> boardIds = ids(visibleBoards(viewer));
-        if (trimmed.isEmpty() || boardIds.isEmpty()) return new BoardResponse.SearchCounts(0, 0, 0, 0);
+        SearchFilter applied = filter == null ? SearchFilter.NONE : filter;
+        List<Long> visible = ids(visibleBoards(viewer));
+        if (trimmed.isEmpty() || visible.isEmpty()) return new BoardResponse.SearchCounts(0, 0, 0, 0);
+        List<Long> boardIds = searchBoardIds(viewer, visible, applied);
         String pattern = likePattern(trimmed);
         Function<SearchScope, Long> count = scope -> postRepository.countPage(boardIds, viewer.id(), viewer.admin(),
-                BoardType.INQUIRY, false, false, false, false, true, pattern, scope.name());
+                BoardType.INQUIRY, false, false, false, false, true, pattern, scope.name(), applied.field().name(),
+                applied.fromOrMin(), applied.toOrMax(), applied.fileOnly());
         return new BoardResponse.SearchCounts(count.apply(SearchScope.POST), count.apply(SearchScope.AUTHOR),
                 count.apply(SearchScope.FILE), count.apply(SearchScope.COMMENT));
     }
@@ -359,14 +417,16 @@ public class BoardService {
         if (boardIds.isEmpty()) return Page.empty(PageRequest.of(page, size));
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, mustRead, important,
                 mine, options.unreadOnly(), search.on(), search.pattern(), search.scope().name(),
-                options.sort() == Sort.ACTIVITY, PageRequest.of(page, size));
+                search.filter().field().name(), search.filter().fromOrMin(), search.filter().toOrMax(),
+                search.filter().fileOnly(), options.sort() == Sort.ACTIVITY, PageRequest.of(page, size));
     }
 
     // 게시판 홈 한 영역: 최신 HOME_SIZE개(전체 개수는 필요 없어 세지 않음)
     private List<BoardPost> homeRows(Viewer viewer, List<Long> boardIds) {
         if (boardIds.isEmpty()) return List.of();
         return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, false, false,
-                false, false, false, "", SearchScope.ALL.name(), false,
+                false, false, false, "", SearchScope.ALL.name(), SearchField.ALL.name(), FILTER_MIN, FILTER_MAX,
+                false, false,
                 org.springframework.data.domain.Pageable.ofSize(HOME_SIZE)
                         .withPage(0)).getContent();
     }

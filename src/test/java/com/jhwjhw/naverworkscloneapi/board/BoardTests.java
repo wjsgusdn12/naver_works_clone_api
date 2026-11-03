@@ -556,6 +556,54 @@ class BoardTests {
         assertThat(service.searchCounts(developer.getId(), "같은 팀").author()).isEqualTo(1);
     }
 
+    // 검색 필터: 제목만·내용만, 기간, 첨부 있는 글만, 최신글 검색의 게시판 좁히기. 탭 건수도 같은 필터.
+    @Test
+    void searchFilterNarrowsByFieldPeriodFileAndBoard() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        Long notice = board(me, BoardType.NOTICE, company.getName()).id();
+        var titleHit = service.create(colleague.getId(),
+                new BoardRequest.PostCreate(free, "분기 결산", doc("숫자 확인"), false, false, List.of()));
+        var bodyHit = service.create(colleague.getId(),
+                new BoardRequest.PostCreate(free, "회의록", doc("분기 실적 정리"), false, false, List.of()));
+        // 공지사항은 관리자만 씀
+        var file = service.upload(admin.getId(),
+                new MockMultipartFile("file", "가상자료.pdf", "application/pdf", "가상".getBytes()));
+        var withFile = service.create(admin.getId(),
+                new BoardRequest.PostCreate(notice, "분기 공지", doc("첨부 확인"), false, false, List.of(file.id())));
+
+        var options = BoardService.ListOptions.DEFAULT;
+        java.util.function.Function<BoardService.SearchFilter, List<Long>> search = filter -> ids(service.list(
+                developer.getId(), BoardService.View.LATEST, null, null, 0, "분기", options,
+                BoardService.SearchScope.POST, filter));
+        var all = BoardService.SearchField.ALL;
+        assertThat(search.apply(BoardService.SearchFilter.NONE))
+                .containsExactlyInAnyOrder(titleHit.id(), bodyHit.id(), withFile.id());
+        assertThat(search.apply(new BoardService.SearchFilter(BoardService.SearchField.TITLE, null, null, false, null)))
+                .containsExactlyInAnyOrder(titleHit.id(), withFile.id());
+        assertThat(search.apply(new BoardService.SearchFilter(BoardService.SearchField.CONTENT, null, null, false, null)))
+                .containsExactly(bodyHit.id());
+        assertThat(search.apply(new BoardService.SearchFilter(all, null, null, true, null)))
+                .containsExactly(withFile.id());
+        assertThat(search.apply(new BoardService.SearchFilter(all, null, null, false, notice)))
+                .containsExactly(withFile.id());
+        // 기간: 앞으로 1시간 뒤부터면 없음, 1시간 전부터면 모두
+        Instant now = Instant.now();
+        assertThat(search.apply(new BoardService.SearchFilter(all, now.plusSeconds(3600), null, false, null)))
+                .isEmpty();
+        assertThat(search.apply(new BoardService.SearchFilter(all, now.minusSeconds(3600), now.plusSeconds(60),
+                false, null))).hasSize(3);
+        assertThatThrownBy(() -> new BoardService.SearchFilter(all, now, now.minusSeconds(1), false, null))
+                .isInstanceOf(BoardException.class);
+        // 필터는 검색어가 없으면 무시
+        assertThat(ids(service.list(developer.getId(), BoardService.View.LATEST, null, null, 0, null, options,
+                BoardService.SearchScope.POST, new BoardService.SearchFilter(all, null, null, true, null))))
+                .contains(titleHit.id(), bodyHit.id());
+
+        assertThat(service.searchCounts(developer.getId(), "분기",
+                new BoardService.SearchFilter(BoardService.SearchField.TITLE, null, null, false, null)).post())
+                .isEqualTo(2);
+    }
+
     @Test
     void searchMatchesTitleBodyOrAuthorAndPagesAreNumbered() {
         Long free = board(me, BoardType.FREE, company.getName()).id();
