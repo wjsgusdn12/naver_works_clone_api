@@ -32,6 +32,12 @@ public class BoardDailyGreeting {
 
     private Instant krDoneAt;
 
+    // 주요 뉴스 부분(V44). 지난 날짜는 RSS에 기사가 없어 section 없이 끝냄.
+    @Column(columnDefinition = "TEXT")
+    private String newsSection;
+
+    private Instant newsDoneAt;
+
     // 서버 한 대만 작업하도록 잡아 둔 기한(저장소의 조건부 갱신으로만 바꿈)
     private Instant leaseUntil;
 
@@ -47,6 +53,11 @@ public class BoardDailyGreeting {
     public void finishUs(String section, Instant at) {
         this.usSection = section;
         this.usDoneAt = at;
+    }
+
+    public void finishNews(String section, Instant at) {
+        this.newsSection = section;
+        this.newsDoneAt = at;
     }
 
     public void finishKr(String section, Instant at) {
