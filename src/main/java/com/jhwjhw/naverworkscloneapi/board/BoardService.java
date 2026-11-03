@@ -280,7 +280,7 @@ public class BoardService {
         int size = options.size();
         String trimmed = trimKeyword(keyword);
         Search search = new Search(!trimmed.isEmpty(), likePattern(trimmed),
-                searchScope == null ? SearchScope.ALL : searchScope);
+                searchScope == null ? SearchScope.ALL : searchScope, trimmed);
         if (view == View.BOARD || view == View.TYPE) {
             List<Long> scope;
             if (view == View.BOARD) {
@@ -314,8 +314,14 @@ public class BoardService {
     }
 
     // on이 false면 검색하지 않음. pattern은 like에 바로 넣는 소문자 "%검색어%"(%·_·\는 글자 그대로 찾게 이스케이프).
-    private record Search(boolean on, String pattern, SearchScope scope) {
-        static final Search NONE = new Search(false, "", SearchScope.ALL);
+    // keyword는 다듬은 검색어 그대로(미리보기를 검색어 둘레로 자를 때 씀).
+    private record Search(boolean on, String pattern, SearchScope scope, String keyword) {
+        static final Search NONE = new Search(false, "", SearchScope.ALL, "");
+
+        // 제목·본문에서 찾는 검색이면 미리보기를 검색어 둘레로
+        String previewKeyword() {
+            return on && (scope == SearchScope.ALL || scope == SearchScope.POST) ? keyword : null;
+        }
     }
 
     // 검색할 곳. ALL: 제목·본문·글쓴이(게시판 안 검색·휴지통), 나머지는 검색 결과 화면의 탭.
@@ -372,7 +378,7 @@ public class BoardService {
     private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows,
             Search search) {
         return new BoardResponse.PostPage(pinned, summaries(viewer, rows.getContent(), matchTexts(rows.getContent(),
-                search)), rows.getNumber(), rows.getTotalPages(), rows.getTotalElements());
+                search), search.previewKeyword()), rows.getNumber(), rows.getTotalPages(), rows.getTotalElements());
     }
 
     // 파일·댓글 검색이면 글마다 처음 맞은 파일 이름·댓글 내용(쿼리 한 번). 그 밖에는 빈 지도.
@@ -389,12 +395,13 @@ public class BoardService {
     }
 
     private List<BoardResponse.PostSummary> summaries(Viewer viewer, List<BoardPost> posts) {
-        return summaries(viewer, posts, Map.of());
+        return summaries(viewer, posts, Map.of(), null);
     }
 
     // 글 줄 만들기. 읽음·첨부 여부·리액션 수는 페이지 전체를 쿼리 한 번씩으로 확인.
+    // previewKeyword가 있으면 미리보기를 본문에서 그 검색어가 처음 나오는 곳 둘레로 자름.
     private List<BoardResponse.PostSummary> summaries(Viewer viewer, List<BoardPost> posts,
-            Map<Long, String> matchTexts) {
+            Map<Long, String> matchTexts, String previewKeyword) {
         if (posts.isEmpty()) return List.of();
         List<Long> postIds = posts.stream().map(BoardPost::getId).toList();
         Set<Long> read = new HashSet<>(readRepository.findReadPostIds(viewer.id(), postIds));
@@ -406,7 +413,7 @@ public class BoardService {
         return posts.stream().map(post -> new BoardResponse.PostSummary(post.getId(), post.getBoard().getId(),
                 post.getBoard().getName(), post.getBoard().getType(),
                 post.getBoard().getType().common() ? "" : post.getBoard().getCompany().getName(),
-                post.getTitle(), preview(post.getContentText()),
+                post.getTitle(), preview(post.getContentText(), previewKeyword),
                 post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
                 marked.contains(post.getId()), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
@@ -416,8 +423,24 @@ public class BoardService {
     }
 
     private static String preview(String text) {
+        return preview(text, null);
+    }
+
+    // 검색어 앞 글자 수(검색어가 미리보기 뒤쪽에서 잘리지 않고 앞쪽에 오게)
+    private static final int PREVIEW_LEAD = 30;
+
+    // 한 줄 미리보기. keyword가 본문 앞부분(미리보기 길이) 밖에 있으면 그 앞 30자부터 잘라 "…"로 시작.
+    static String preview(String text, String keyword) {
         String oneLine = text.replaceAll("\\s+", " ").strip();
-        return oneLine.length() <= PREVIEW_LENGTH ? oneLine : oneLine.substring(0, PREVIEW_LENGTH) + "…";
+        int start = 0;
+        if (keyword != null && !keyword.isBlank()) {
+            String needle = keyword.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+            int at = oneLine.toLowerCase(Locale.ROOT).indexOf(needle);
+            if (at >= 0 && at + needle.length() > PREVIEW_LENGTH - PREVIEW_LEAD) start = Math.max(0, at - PREVIEW_LEAD);
+        }
+        String body = oneLine.substring(start);
+        String cut = body.length() <= PREVIEW_LENGTH ? body : body.substring(0, PREVIEW_LENGTH) + "…";
+        return start > 0 ? "…" + cut : cut;
     }
 
     // ---------- 글 ----------
