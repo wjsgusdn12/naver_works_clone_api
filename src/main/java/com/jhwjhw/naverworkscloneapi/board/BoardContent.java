@@ -24,7 +24,7 @@ public class BoardContent {
 
     // 블록 노드(앞뒤로 줄을 바꿔 글자를 뽑음)와 줄 안 노드
     private static final Set<String> BLOCKS = Set.of("paragraph", "heading", "bulletList", "orderedList", "listItem",
-            "blockquote", "codeBlock", "horizontalRule", "image", "table", "tableRow");
+            "blockquote", "codeBlock", "horizontalRule", "image", "table", "tableRow", MarketBlocks.CALLOUT);
     private static final Set<String> SIMPLE_MARKS = Set.of("bold", "italic", "strike", "code", "underline");
     // 표 칸 정렬과 글자 색 서식(tone)은 정해 둔 값만 남김(임의의 CSS 색·스타일은 받지 않음)
     private static final Set<String> CELL_ALIGNS = Set.of("left", "center", "right");
@@ -84,6 +84,16 @@ public class BoardContent {
         result.put("type", type);
         switch (type) {
             case "doc", "paragraph", "bulletList", "listItem", "blockquote", "table", "tableRow" -> {
+            }
+            case "marketHero", "marketBanner", "marketStats", "marketBreadth", "marketHeatmap", "marketRanks" -> {
+                // 증시 보고 꾸밈 블록: 속성만 있고 자식은 없음
+                result.put("attrs", MarketBlocks.attrs(type, attrs(source), state.text::append));
+                return result;
+            }
+            case MarketBlocks.CALLOUT -> {
+                Map<String, Object> clean = MarketBlocks.attrs(type, attrs(source), value -> {
+                });
+                if (!clean.isEmpty()) result.put("attrs", clean);
             }
             case "tableHeader", "tableCell" -> {
                 if (attrs(source).get("align") instanceof String align && CELL_ALIGNS.contains(align)) {
