@@ -32,6 +32,15 @@ public final class MarketReportBuilder {
             "AAPL", "애플", "MSFT", "마이크로소프트", "NVDA", "엔비디아", "AMZN", "아마존", "GOOGL", "알파벳",
             "META", "메타", "TSLA", "테슬라");
 
+    // 만든 부분의 형식 번호. 보고 모양을 바꾸면 올려서, 예전 형식으로 저장된 지난 글을 새 형식으로 다시 만들게 함.
+    // (저장해 둔 부분 JSON에만 남고, 게시글 본문에서는 본문 검사가 떼어 냄)
+    public static final int FORMAT = 3;
+    private static final String FORMAT_MARK = "\"format\":" + FORMAT;
+
+    public static boolean isCurrent(String sectionJson) {
+        return sectionJson != null && sectionJson.contains(FORMAT_MARK);
+    }
+
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal EOK = new BigDecimal("100000000");
     // 추이 그래프에 넣는 최근 거래일 수
@@ -49,8 +58,8 @@ public final class MarketReportBuilder {
 
     // 히어로 + 인사 문구 + 미국 부분 + 한국 부분 + 안내. 부분이 null이면 기능이 켜진 경우에만 "준비 중" 안내를 넣음.
     // 둘 다 꺼져 있으면 예전처럼 인사 문구 한 줄만.
-    public static Map<String, Object> document(LocalDate date, String greeting, List<Map<String, Object>> us,
-            List<Map<String, Object>> kr, boolean usEnabled, boolean krEnabled) {
+    public static Map<String, Object> document(LocalDate date, String greeting, List<Map<String, Object>> news,
+            List<Map<String, Object>> us, List<Map<String, Object>> kr, boolean usEnabled, boolean krEnabled) {
         List<Map<String, Object>> blocks = new ArrayList<>();
         boolean report = usEnabled || krEnabled;
         if (report) {
@@ -59,6 +68,7 @@ public final class MarketReportBuilder {
                             + weekday(date) + ")")));
         }
         blocks.add(paragraph(text(greeting)));
+        if (news != null) blocks.addAll(news);
         if (us != null) blocks.addAll(us);
         else if (usEnabled) blocks.addAll(pending("us", "미국 증시", "⏳ 간밤 미국 증시 분석을 불러오는 중입니다."));
         if (kr != null) blocks.addAll(kr);
@@ -68,7 +78,8 @@ public final class MarketReportBuilder {
         }
         if (report) {
             blocks.add(callout("muted", paragraph(text("※ 시세 숫자로 자동 작성한 요약이며 투자 권유가 아닙니다. "
-                    + "미국 지수는 지수를 따라가는 대표 ETF 시세입니다. 출처: 금융위원회(공공데이터포털), Alpha Vantage"))));
+                    + "미국 지수는 지수를 따라가는 대표 ETF 시세입니다. 출처: 금융위원회(공공데이터포털), Alpha Vantage"
+                    + (news != null ? ", 뉴스 제목·링크: 연합뉴스·Google 뉴스(기사 저작권은 각 언론사)" : "")))));
         }
         return Map.of("type", "doc", "content", blocks);
     }
@@ -82,6 +93,94 @@ public final class MarketReportBuilder {
         String code = market.equals("미국") ? "us" : "kr";
         return List.of(banner(code, market + " 증시", "데이터 없음", null, null),
                 callout("muted", paragraph(text("이 날짜의 " + market + " 증시 데이터를 받지 못해 분석을 생략합니다."))));
+    }
+
+    // ───────────── 뉴스 ─────────────
+
+    // 기사가 하나도 없으면 빈 값(뉴스 부분 없이)
+    public static Optional<List<Map<String, Object>>> newsSection(List<NewsClient.Article> articles,
+            java.time.ZoneId zone) {
+        if (articles.isEmpty()) return Optional.empty();
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (NewsClient.Article article : articles) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("category", article.category());
+            item.put("title", article.title());
+            if (!article.source().isBlank()) item.put("source", article.source());
+            if (article.publishedAt() != null) {
+                java.time.ZonedDateTime local = article.publishedAt().withZoneSameInstant(zone);
+                item.put("time", local.getMonthValue() + "/" + local.getDayOfMonth() + " "
+                        + String.format(Locale.ROOT, "%02d:%02d", local.getHour(), local.getMinute()));
+            }
+            item.put("href", article.link());
+            items.add(item);
+        }
+        return Optional.of(List.of(Map.of("type", "marketNews", "attrs",
+                Map.of("format", FORMAT, "title", "오늘의 주요 뉴스", "items", items))));
+    }
+
+    // ───────────── 추세(이야기용) ─────────────
+
+    // 최근 종가(오래된 날짜부터)로 본 흐름. streak: +n 연속 상승, -n 연속 하락. 비교할 날이 모자라면 null.
+    record Trend(Double fiveDay, Double twentyDay, int streak, Double fromHigh, boolean newHigh, boolean newLow) {
+    }
+
+    static Trend trend(List<Double> closes) {
+        int size = closes.size();
+        if (size < 2) return new Trend(null, null, 0, null, false, false);
+        double last = closes.get(size - 1);
+        Double five = size > 5 ? percent(closes.get(size - 6), last) : null;
+        Double twenty = size >= 20 ? percent(closes.getFirst(), last) : null;
+        int streak = 0;
+        for (int i = size - 1; i > 0; i--) {
+            int sign = Double.compare(closes.get(i), closes.get(i - 1));
+            if (sign == 0 || (streak != 0 && Integer.signum(streak) != sign)) break;
+            streak += sign;
+        }
+        double high = closes.stream().mapToDouble(Double::doubleValue).max().orElse(last);
+        double low = closes.stream().mapToDouble(Double::doubleValue).min().orElse(last);
+        boolean enough = size >= 10;
+        return new Trend(five, twenty, streak, high == 0 ? null : percent(high, last), enough && last >= high,
+                enough && last <= low);
+    }
+
+    private static double percent(double from, double to) {
+        return from == 0 ? 0 : (to - from) / from * 100;
+    }
+
+    private static String pct(double value) {
+        return String.format(Locale.ROOT, "%+.2f%%", value);
+    }
+
+    // "S&P 500은 최근 5거래일 +1.20%, 20거래일 +3.40%입니다. 3거래일 연속 올랐고, 최근 20거래일 최고치를 새로 썼습니다."
+    private static String trendSentence(String subject, Trend trend) {
+        List<String> spans = new ArrayList<>();
+        if (trend.fiveDay() != null) spans.add("최근 5거래일 " + pct(trend.fiveDay()));
+        if (trend.twentyDay() != null) spans.add("20거래일 " + pct(trend.twentyDay()));
+        StringBuilder text = new StringBuilder();
+        if (!spans.isEmpty()) text.append(subject).append(' ').append(String.join(", ", spans)).append("입니다.");
+        List<String> notes = new ArrayList<>();
+        if (trend.streak() >= 2) notes.add(trend.streak() + "거래일 연속 올랐");
+        else if (trend.streak() <= -2) notes.add(-trend.streak() + "거래일 연속 내렸");
+        if (trend.newHigh()) notes.add("최근 20거래일 최고치를 새로 썼");
+        else if (trend.newLow()) notes.add("최근 20거래일 최저치까지 밀렸");
+        else if (trend.fromHigh() != null && trend.fromHigh() <= -3) {
+            notes.add("최근 고점보다 " + String.format(Locale.ROOT, "%.1f", -trend.fromHigh()) + "% 낮은 자리에 있");
+        }
+        if (!notes.isEmpty()) {
+            if (text.isEmpty()) text.append(subject);
+            text.append(' ').append(String.join("고, ", notes)).append("습니다.");
+        }
+        return text.toString().strip();
+    }
+
+    private static Map<String, Object> story(String lead, String body) {
+        return paragraph(bold(lead + "  "), text(body));
+    }
+
+    private static Map<String, Object> checklist(List<String> points) {
+        return Map.of("type", "bulletList", "content", points.stream()
+                .map(point -> Map.of("type", "listItem", "content", List.of(paragraph(text(point))))).toList());
     }
 
     // ───────────── 미국 ─────────────
@@ -112,6 +211,39 @@ public final class MarketReportBuilder {
 
         List<String> tech = US_BIG_TECH.keySet().stream().filter(changes::containsKey)
                 .sorted(Comparator.comparing((String symbol) -> changes.get(symbol).rate()).reversed()).toList();
+        Trend spyTrend = trend(spark(series.get("SPY"), basis));
+        Trend qqqTrend = trend(spark(series.get("QQQ"), basis));
+        List<Mover> gainers = movers != null && basis.equals(movers.date()) ? filterMovers(movers.gainers()) : List.of();
+        List<Mover> losers = movers != null && basis.equals(movers.date()) ? filterMovers(movers.losers()) : List.of();
+        List<Mover> active = movers != null && basis.equals(movers.date()) ? filterMovers(movers.active()) : List.of();
+
+        // 📖 시장 이야기: 추세 → 빅테크 → 특징주 순서로 풀어 씀
+        blocks.add(heading(3, "📖 미국 시장 이야기"));
+        String spyStory = trendSentence("S&P 500은", spyTrend);
+        String qqqStory = trendSentence("나스닥 100은", qqqTrend);
+        if (!spyStory.isEmpty() || !qqqStory.isEmpty()) {
+            blocks.add(story("📈 흐름", (spyStory + " " + qqqStory).strip()));
+        }
+        if (!tech.isEmpty()) blocks.add(story("🧑‍💻 빅테크", techStory(tech, changes, series, basis)));
+        if (!gainers.isEmpty() || !losers.isEmpty() || !active.isEmpty()) {
+            List<String> parts = new ArrayList<>();
+            if (!gainers.isEmpty()) {
+                parts.add("급등 1위는 " + gainers.getFirst().ticker() + "(" + pct(gainers.getFirst().changePercent()
+                        .doubleValue()) + ")");
+            }
+            if (!losers.isEmpty()) {
+                parts.add("급락 1위는 " + losers.getFirst().ticker() + "(" + pct(losers.getFirst().changePercent()
+                        .doubleValue()) + ")");
+            }
+            String text = String.join(", ", parts) + (parts.isEmpty() ? "" : "였습니다.");
+            if (!active.isEmpty()) {
+                text += " 거래가 가장 많이 몰린 종목은 " + active.getFirst().ticker() + "(거래량 "
+                        + compact(active.getFirst().volume()) + ", " + pct(active.getFirst().changePercent().doubleValue())
+                        + ")입니다.";
+            }
+            blocks.add(story("🔥 특징주", text.strip()));
+        }
+
         if (!tech.isEmpty()) {
             List<Map<String, Object>> tiles = tech.stream().map(symbol -> tile(US_BIG_TECH.get(symbol),
                     symbol + " · " + usd(changes.get(symbol).close()), changes.get(symbol).rate())).toList();
@@ -119,9 +251,7 @@ public final class MarketReportBuilder {
             blocks.add(paragraph(text(bigTechSummary(tech, changes))));
         }
 
-        if (movers != null && basis.equals(movers.date())) {
-            List<Mover> gainers = filterMovers(movers.gainers());
-            List<Mover> losers = filterMovers(movers.losers());
+        if (!gainers.isEmpty() || !losers.isEmpty()) {
             List<Map<String, Object>> groups = new ArrayList<>();
             if (!gainers.isEmpty()) groups.add(rankGroup("🚀 급등 TOP", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
             if (!losers.isEmpty()) groups.add(rankGroup("🧊 급락 TOP", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
@@ -130,7 +260,54 @@ public final class MarketReportBuilder {
                 blocks.add(paragraph(tone("급등·급락은 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다.", "muted")));
             }
         }
+
+        blocks.add(heading(3, "✅ 오늘 한국장 체크포인트"));
+        blocks.add(checklist(usCheckpoints(changes, spyTrend)));
         return Optional.of(blocks);
+    }
+
+    // 빅테크 이야기: 몇 개 올랐는지 + 가장 강한·약한 종목의 하루·5거래일 흐름
+    private static String techStory(List<String> tech, Map<String, Change> changes, Map<String, List<DailyBar>> series,
+            LocalDate basis) {
+        long up = tech.stream().filter(symbol -> changes.get(symbol).rate().signum() > 0).count();
+        StringBuilder text = new StringBuilder();
+        if (up == tech.size()) text.append("빅테크가 모두 올랐습니다.");
+        else if (up == 0) text.append("빅테크가 모두 내렸습니다.");
+        else text.append("빅테크 ").append(tech.size()).append("개 중 ").append(up).append("개가 올라 종목별로 엇갈렸습니다.");
+        for (String symbol : tech.size() > 1 ? List.of(tech.getFirst(), tech.getLast()) : List.of(tech.getFirst())) {
+            Change change = changes.get(symbol);
+            Trend trend = trend(spark(series.get(symbol), basis));
+            text.append(' ').append(topic(US_BIG_TECH.get(symbol))).append(" 하루 ").append(pct(change.rate().doubleValue()));
+            if (trend.fiveDay() != null) {
+                text.append(", 5거래일 ").append(pct(trend.fiveDay()));
+                boolean sameWay = Math.signum(trend.fiveDay()) == change.rate().signum();
+                text.append(sameWay ? "로 흐름이 이어졌습니다." : "로 최근 흐름과 반대로 움직였습니다.");
+            } else {
+                text.append("였습니다.");
+            }
+        }
+        return text.toString();
+    }
+
+    // 미국장 결과로 본 한국장 체크포인트(정해 둔 규칙, 투자 권유 아님)
+    private static List<String> usCheckpoints(Map<String, Change> changes, Trend spyTrend) {
+        List<String> points = new ArrayList<>();
+        Change qqq = changes.get("QQQ");
+        if (qqq != null && qqq.rate().doubleValue() >= 1) {
+            points.add("간밤 나스닥 강세(" + signed(qqq.rate()) + "%) — 한국 반도체·IT 대형주가 따라 움직이는지");
+        } else if (qqq != null && qqq.rate().doubleValue() <= -1) {
+            points.add("간밤 기술주 약세(" + signed(qqq.rate()) + "%) — 한국 반도체·성장주에 부담이 이어지는지");
+        }
+        Change iwm = changes.get("IWM");
+        Change spy = changes.get("SPY");
+        if (iwm != null && iwm.rate().doubleValue() - spy.rate().doubleValue() >= 1) {
+            points.add("미국 중소형주 강세 — 코스닥 중소형주로 온기가 번지는지");
+        }
+        if (spyTrend.streak() >= 3) points.add("S&P 500 " + spyTrend.streak() + "거래일 연속 상승 — 단기 숨 고르기가 나오는지");
+        else if (spyTrend.streak() <= -3) points.add("S&P 500 " + (-spyTrend.streak()) + "거래일 연속 하락 — 반등 시도가 나오는지");
+        if (spyTrend.newHigh()) points.add("S&P 500 최근 20거래일 최고치 — 상승 추세가 이어지는지");
+        if (points.isEmpty()) points.add("주요 지수 움직임이 크지 않음 — 개별 종목·실적 뉴스 위주의 장세가 될지");
+        return points;
     }
 
     record Change(BigDecimal close, BigDecimal diff, BigDecimal rate, long volume) {
@@ -247,6 +424,8 @@ public final class MarketReportBuilder {
 
             List<StockQuote> caps = rated.stream().filter(stock -> stock.marketCap() != null)
                     .sorted(Comparator.comparing(StockQuote::marketCap).reversed()).limit(10).toList();
+            blocks.add(heading(3, "📖 한국 시장 이야기"));
+            blocks.addAll(krStory(kospi.get(), kosdaq.orElse(null), rated, caps, histories, basis));
             if (!caps.isEmpty()) {
                 List<Map<String, Object>> tiles = caps.stream().map(stock -> tile(stock.name(),
                         "시총 " + won(stock.marketCap()) + " · " + price(stock.close()), stock.rate())).toList();
@@ -276,7 +455,92 @@ public final class MarketReportBuilder {
                 blocks.add(paragraph(tone("상승률·하락률·거래대금 순위는 거래대금 10억 원 이상 종목만 모았습니다.", "muted")));
             }
         }
+        blocks.add(heading(3, "✅ 다음 거래일 체크포인트"));
+        blocks.add(checklist(krCheckpoints(kospi.get(), rated, histories, basis)));
         return Optional.of(blocks);
+    }
+
+    private static List<Double> closes(Map<String, List<IndexClose>> histories, String name, LocalDate basis) {
+        List<Double> closes = histories.getOrDefault(name, List.of()).stream()
+                .filter(close -> !close.date().isAfter(basis)).map(close -> close.close().doubleValue()).toList();
+        return closes.size() > SPARK_DAYS ? closes.subList(closes.size() - SPARK_DAYS, closes.size()) : closes;
+    }
+
+    // 한국 이야기: 흐름 → 시장 폭 → 대형주 → 거래대금 쏠림 → 상·하한가
+    private static List<Map<String, Object>> krStory(IndexQuote kospi, IndexQuote kosdaq, List<StockQuote> stocks,
+            List<StockQuote> caps, Map<String, List<IndexClose>> histories, LocalDate basis) {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        String flow = (trendSentence("코스피는", trend(closes(histories, "코스피", basis))) + " "
+                + (kosdaq == null ? "" : trendSentence("코스닥은", trend(closes(histories, "코스닥", basis))))).strip();
+        if (!flow.isEmpty()) blocks.add(story("📈 흐름", flow));
+
+        long up = stocks.stream().filter(stock -> stock.rate().signum() > 0).count();
+        long down = stocks.stream().filter(stock -> stock.rate().signum() < 0).count();
+        String breadth = String.format(Locale.ROOT, "코스피·코스닥 %,d개 종목 중 %,d개(%d%%)가 오르고 %,d개(%d%%)가 내렸습니다.",
+                stocks.size(), up, Math.round(up * 100.0 / stocks.size()), down, Math.round(down * 100.0 / stocks.size()));
+        double ratio = up + down == 0 ? 0.5 : (double) up / (up + down);
+        if (kospi.rate().signum() > 0 && ratio < 0.45) breadth += " 지수는 올랐지만 오른 종목이 적어 '지수만 오른 장'에 가까웠습니다.";
+        else if (kospi.rate().signum() < 0 && ratio > 0.55) breadth += " 지수는 내렸지만 오른 종목이 많아 개별 종목은 선방했습니다.";
+        else if (ratio >= 0.65) breadth += " 대부분 종목이 함께 오른 '고른 강세'였습니다.";
+        else if (ratio <= 0.35) breadth += " 대부분 종목이 함께 내린 '고른 약세'였습니다.";
+        blocks.add(story("🌡️ 시장 체감", breadth));
+
+        if (!caps.isEmpty()) {
+            long capUp = caps.stream().filter(stock -> stock.rate().signum() > 0).count();
+            StringBuilder big = new StringBuilder("시가총액 상위 " + caps.size() + "개 중 " + capUp + "개가 올랐습니다. ");
+            for (int i = 0; i < Math.min(3, caps.size()); i++) {
+                StockQuote stock = caps.get(i);
+                big.append(i + 1).append("위 ").append(stock.name()).append('(').append(signed(stock.rate())).append("%)")
+                        .append(i < Math.min(3, caps.size()) - 1 ? ", " : "");
+            }
+            big.append("의 움직임이 지수 방향을 좌우했습니다.");
+            blocks.add(story("🏢 대형주", big.toString()));
+        }
+
+        BigDecimal total = stocks.stream().map(StockQuote::tradeValue).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<StockQuote> busiest = stocks.stream().filter(stock -> stock.tradeValue() != null)
+                .sorted(Comparator.comparing(StockQuote::tradeValue).reversed()).limit(5).toList();
+        if (total.signum() > 0 && !busiest.isEmpty()) {
+            double topShare = busiest.getFirst().tradeValue().doubleValue() / total.doubleValue() * 100;
+            double fiveShare = busiest.stream().mapToDouble(stock -> stock.tradeValue().doubleValue()).sum()
+                    / total.doubleValue() * 100;
+            blocks.add(story("💰 돈의 흐름", String.format(Locale.ROOT,
+                    "전체 거래대금은 %s입니다. 1위 %s에 %.1f%%, 상위 5종목에 %.1f%%가 몰렸습니다.", won(total),
+                    busiest.getFirst().name(), topShare, fiveShare)
+                    + (topShare >= 10 ? " 한 종목 쏠림이 강한 하루였습니다." : "")));
+        }
+
+        long upperLimit = stocks.stream().filter(stock -> stock.rate().doubleValue() >= 29.5).count();
+        long lowerLimit = stocks.stream().filter(stock -> stock.rate().doubleValue() <= -29.5).count();
+        if (upperLimit + lowerLimit > 0) {
+            String names = stocks.stream().filter(stock -> stock.rate().doubleValue() >= 29.5).limit(3)
+                    .map(StockQuote::name).reduce((a, b) -> a + ", " + b).map(list -> " (" + list + " 등)").orElse("");
+            blocks.add(story("🚨 상·하한가", "상한가 " + upperLimit + "개" + names + ", 하한가 " + lowerLimit + "개가 나왔습니다."));
+        }
+        return blocks;
+    }
+
+    private static List<String> krCheckpoints(IndexQuote kospi, List<StockQuote> stocks,
+            Map<String, List<IndexClose>> histories, LocalDate basis) {
+        List<String> points = new ArrayList<>();
+        double rate = kospi.rate().doubleValue();
+        if (rate >= 1.5) points.add("코스피 강한 상승(" + signed(kospi.rate()) + "%) 다음 날 — 차익 실현 매물이 나오는지");
+        else if (rate <= -1.5) points.add("코스피 급락(" + signed(kospi.rate()) + "%) 다음 날 — 저가 매수가 들어오는지");
+        long up = stocks.stream().filter(stock -> stock.rate().signum() > 0).count();
+        long down = stocks.stream().filter(stock -> stock.rate().signum() < 0).count();
+        if (rate > 0 && up < down) points.add("오른 종목보다 내린 종목이 많음 — 대형주 쏠림이 이어지는지");
+        if (kospi.yearHigh() != null) {
+            double gap = (kospi.yearHigh().doubleValue() - kospi.close().doubleValue()) / kospi.yearHigh().doubleValue() * 100;
+            if (gap <= 0) points.add("코스피 52주 최고치 경신 — 신고가 행진이 이어지는지");
+            else if (gap <= 3) points.add(String.format(Locale.ROOT, "코스피 52주 최고치까지 %.1f%% — 돌파를 시도하는지", gap));
+        }
+        Trend trend = trend(closes(histories, "코스피", basis));
+        if (trend.streak() >= 3) points.add("코스피 " + trend.streak() + "거래일 연속 상승 — 숨 고르기가 나오는지");
+        else if (trend.streak() <= -3) points.add("코스피 " + (-trend.streak()) + "거래일 연속 하락 — 반등 계기가 생기는지");
+        if (points.isEmpty()) points.add("뚜렷한 쏠림 없음 — 업종별 순환매 흐름을 확인");
+        points.add("오늘 밤 미국장 — 내일 아침 브리핑에서 이어서 확인");
+        return points;
     }
 
     private static String krSummary(IndexQuote kospi, IndexQuote kosdaq, List<StockQuote> stocks) {
@@ -399,6 +663,21 @@ public final class MarketReportBuilder {
         return Map.of("type", "text", "text", value);
     }
 
+    static Map<String, Object> heading(int level, String value) {
+        return Map.of("type", "heading", "attrs", Map.of("level", level), "content", List.of(text(value)));
+    }
+
+    // 이름 뒤 "은/는": 마지막 글자에 받침이 있으면 은. 한글이 아니면 둘 다 적음.
+    static String topic(String name) {
+        char last = name.charAt(name.length() - 1);
+        if (last < 0xAC00 || last > 0xD7A3) return name + "은(는)";
+        return name + ((last - 0xAC00) % 28 == 0 ? "는" : "은");
+    }
+
+    static Map<String, Object> bold(String value) {
+        return Map.of("type", "text", "text", value, "marks", List.of(Map.of("type", "bold")));
+    }
+
     static Map<String, Object> tone(String value, String tone) {
         return Map.of("type", "text", "text", value, "marks",
                 List.of(Map.of("type", "tone", "attrs", Map.of("tone", tone))));
@@ -417,6 +696,7 @@ public final class MarketReportBuilder {
     // mood·moodLabel이 null이면 배지 없이(준비 중·데이터 없음)
     private static Map<String, Object> banner(String market, String title, String date, String mood, String moodLabel) {
         Map<String, Object> attrs = new LinkedHashMap<>();
+        attrs.put("format", FORMAT);
         attrs.put("market", market);
         attrs.put("title", title);
         attrs.put("date", date);

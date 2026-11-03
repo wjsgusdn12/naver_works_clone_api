@@ -79,6 +79,6 @@ public class BoardDailyGreetingService {
 
     // 편집기 문서 형식. 인사 문구 + (증시 분석이 켜져 있으면) "불러오는 중" 안내 — 분석은 BoardMarketReportService가 곧 채움.
     private String contentJson(LocalDate date) {
-        return reportService.documentJson(date, CONTENT_TEXT, null, null);
+        return reportService.documentJson(date, CONTENT_TEXT, null, null, null);
     }
 }

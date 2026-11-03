@@ -6,6 +6,7 @@ import com.jhwjhw.naverworkscloneapi.board.domain.BoardDailyGreeting;
 import com.jhwjhw.naverworkscloneapi.board.domain.BoardPost;
 import com.jhwjhw.naverworkscloneapi.board.market.KoreaMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.market.MarketHttp;
+import com.jhwjhw.naverworkscloneapi.board.market.NewsClient;
 import com.jhwjhw.naverworkscloneapi.board.market.UsMarketClient;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardDailyGreetingRepository;
 import com.jhwjhw.naverworkscloneapi.board.repository.BoardPostRepository;
@@ -71,6 +72,8 @@ class BoardMarketReportTests {
     private BoardMarketReportService service(ZonedDateTime now) {
         MarketHttp http = uri -> {
             calls.incrementAndGet();
+            if (uri.getHost().contains("yna.co.kr")) return uri.getPath().contains("economy") ? YNA_ECONOMY : YNA_ALL;
+            if (uri.getHost().contains("news.google.com")) return GOOGLE;
             String query = URLDecoder.decode(uri.getRawQuery(), StandardCharsets.UTF_8);
             if (uri.getHost().contains("alphavantage")) {
                 return query.contains("TOP_GAINERS_LOSERS") ? MOVERS : daily(param(query, "symbol"));
@@ -83,7 +86,8 @@ class BoardMarketReportTests {
         };
         return new BoardMarketReportService(greetings, posts, content, objectMapper, transactionManager,
                 new KoreaMarketClient(http, objectMapper, "fake-key"),
-                new UsMarketClient(http, objectMapper, "fake-key", Duration.ZERO), LocalTime.of(14, 0), SEOUL,
+                new UsMarketClient(http, objectMapper, "fake-key", Duration.ZERO), new NewsClient(http),
+                LocalTime.of(14, 0), SEOUL,
                 Clock.fixed(now.toInstant(), SEOUL));
     }
 
@@ -102,8 +106,17 @@ class BoardMarketReportTests {
                 .contains("Daily Market Report").contains("2026년 11월 3일 (화)")
                 .contains("미국 증시 11월 2일(월) 마감").contains("S&P 500").contains("+1.00%").contains("상승")
                 .contains("기술주").contains("빅테크 7개 중").contains("FAKEUP").doesNotContain("PENNY")
-                .contains("한국 증시 분석은 오후 2시 이후");
-        assertThat(post.getContentJson()).contains("\"type\":\"marketHero\"").contains("\"type\":\"marketStats\"")
+                .contains("한국 증시 분석은 오후 2시 이후")
+                // 시장 이야기·체크포인트
+                .contains("미국 시장 이야기").contains("빅테크 7개 중 6개가 올라")
+                .contains("엔비디아는 하루 +5.00%").contains("급등 1위는 FAKEUP").contains("오늘 한국장 체크포인트")
+                .contains("간밤 나스닥 강세")
+                // 뉴스: 사진 기사·중복·연합뉴스 중복 출처는 빠지고, 구글 제목 끝 언론사는 떼어 냄
+                .contains("오늘의 주요 뉴스").contains("가상 반도체 수출 사상 최대").contains("가상 환율 1,300원대")
+                .contains("가상경제신문").doesNotContain("[포토]").doesNotContain("- 가상경제신문 ");
+        assertThat(morning.getNewsDoneAt()).isNotNull();
+        assertThat(post.getContentJson()).contains("\"type\":\"marketNews\"").contains("https://example.com/news/1")
+                .doesNotContain("\"format\"").contains("\"type\":\"marketHero\"").contains("\"type\":\"marketStats\"")
                 .contains("\"type\":\"marketHeatmap\"").contains("\"type\":\"marketRanks\"").contains("\"spark\"")
                 .contains("\"tone\":\"up\"");
         // 시스템이 채워도 바뀐 것을 알 수 있게 "(수정됨)" 시각이 남음
@@ -120,8 +133,11 @@ class BoardMarketReportTests {
                 .contains("시가총액 TOP 10").contains("가상전자").contains("거래대금 TOP").contains("오름 2 보합 0 내림 1")
                 .doesNotContain("한국 증시 분석은 오후 2시 이후").contains("미국 증시 11월 2일(월) 마감");
         assertThat(post.getContentJson()).contains("\"type\":\"marketBreadth\"");
-        // 거래대금 10억 원 미만 종목은 급등 목록에서 빠짐
-        assertThat(post.getContentText()).doesNotContain("가상소형");
+        assertThat(post.getContentText()).contains("한국 시장 이야기").contains("시장 체감").contains("돈의 흐름")
+                .contains("1위 가상전자").contains("상한가 1개 (가상소형 등)").contains("다음 거래일 체크포인트")
+                .contains("오늘 밤 미국장").doesNotContain("52주 최저");
+        // 거래대금 10억 원 미만 종목은 상승률 순위 카드에서 빠짐(상한가 이야기에는 나옴)
+        assertThat(post.getContentText()).doesNotContain("가상소형 1,200원");
         assertThat(post.getUpdatedAt()).isNotNull();
         // 한국: 코스피 추이 1 + 지수 2 + 코스닥 추이 1 + 종목 1
         assertThat(calls.get() - before).isEqualTo(5);
@@ -142,9 +158,9 @@ class BoardMarketReportTests {
 
     @Test
     void givesUpOnOldDayWithoutData() {
-        LocalDate day = LocalDate.of(2026, 1, 5);
+        LocalDate day = LocalDate.of(2026, 10, 20);
         assertThat(greetingService.postIfMissing(day)).isTrue();
-        // 가짜 미국 시세는 2026-10-30부터라 1월 5일 앞 거래일이 없음 → 오래된 날짜라 "받지 못함"으로 끝냄
+        // 가짜 시세는 2026-10-30부터라 10월 20일 앞 거래일이 없음 → 7일 넘게 지난 날짜라 "받지 못함"으로 끝냄
         service(LocalDate.of(2026, 11, 3).atTime(15, 0).atZone(SEOUL)).fillPending();
         BoardDailyGreeting greeting = greetings.findById(day).orElseThrow();
         assertThat(greeting.getUsDoneAt()).isNotNull();
@@ -188,6 +204,38 @@ class BoardMarketReportTests {
                {"ticker": "FAKEDN", "price": "12.00", "change_amount": "-4.0", "change_percentage": "-25.0%", "volume": "2100000"}
              ],
              "most_actively_traded": []}
+            """;
+
+    private static final String YNA_ECONOMY = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0"><channel><title>연합뉴스 경제</title>
+            <item><title><![CDATA[[포토] 가상 시장 풍경]]></title><link>https://example.com/news/photo</link>
+              <pubDate>Tue, 3 Nov 2026 08:30:00 +0900</pubDate></item>
+            <item><title><![CDATA[가상 반도체 수출 사상 최대]]></title><link>https://example.com/news/1</link>
+              <pubDate>Tue, 3 Nov 2026 08:00:00 +0900</pubDate></item>
+            <item><title><![CDATA[가상 오래된 기사]]></title><link>https://example.com/news/old</link>
+              <pubDate>Sun, 1 Nov 2026 08:00:00 +0900</pubDate></item>
+            </channel></rss>
+            """;
+
+    private static final String YNA_ALL = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0"><channel>
+            <item><title><![CDATA[가상 반도체 수출 사상 최대]]></title><link>https://example.com/news/1b</link>
+              <pubDate>Tue, 3 Nov 2026 08:00:00 +0900</pubDate></item>
+            <item><title><![CDATA[가상 정상회의 개막]]></title><link>https://example.com/news/2</link>
+              <pubDate>Tue, 3 Nov 2026 07:00:00 +0900</pubDate></item>
+            </channel></rss>
+            """;
+
+    private static final String GOOGLE = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0"><channel>
+            <item><title>가상 환율 1,300원대 - 가상경제신문</title><link>https://example.com/news/3</link>
+              <pubDate>Mon, 02 Nov 2026 23:00:00 GMT</pubDate><source url="https://example.com">가상경제신문</source></item>
+            <item><title>가상 연합 기사 - 연합뉴스</title><link>https://example.com/news/4</link>
+              <pubDate>Mon, 02 Nov 2026 23:00:00 GMT</pubDate><source url="https://example.com">연합뉴스</source></item>
+            </channel></rss>
             """;
 
     private static final String INDEX_RANGE = """
