@@ -46,12 +46,15 @@ public class ApiDashboardService {
     private final DataSource dataSource;
     private final ApiMetricHourlyRepository hourlyRepository;
     private final ApiMetricBucketRepository bucketRepository;
+    private final DbPoolMonitor poolMonitor;
     // 하루·한 주를 자르는 기준 시간대
     private final ZoneId zone;
 
     public ApiDashboardService(ApiMetricsRecorder recorder, ApiMetricsStore store, ServerStatusReporter reporter,
             DataSource dataSource, ApiMetricHourlyRepository hourlyRepository,
-            ApiMetricBucketRepository bucketRepository, @Value("${app.monitoring.zone:Asia/Seoul}") String zone) {
+            ApiMetricBucketRepository bucketRepository, DbPoolMonitor poolMonitor,
+            @Value("${app.monitoring.zone:Asia/Seoul}") String zone) {
+        this.poolMonitor = poolMonitor;
         this.recorder = recorder;
         this.store = store;
         this.reporter = reporter;
@@ -89,7 +92,7 @@ public class ApiDashboardService {
 
         MetricsBucket previous = previousTotal(range, period.trend().getFirst().startAt(), now);
         return new ApiDashboardResponse(now, zone.getId(), store.mode(), databaseStatus(), servers, range.name(),
-                summary(period.total()), summary(previous), period.trend(), period.ranking());
+                summary(period.total()), summary(previous), period.trend(), period.ranking(), poolMonitor.snapshot());
     }
 
     // 한 기간의 계산 결과: 숫자 카드용 합계, 그래프 점, 순위.
@@ -250,7 +253,8 @@ public class ApiDashboardService {
                     points.add(new ApiDashboardResponse.TrendPoint(start, cell.getCount(),
                             cell.getClientErrors() + cell.getServerErrors(),
                             average(cell.getDurationSumMs(), cell.getCount()),
-                            cell.getCount() == 0 ? 0 : coarse.p95Ms(), fineMinutes, latencyOf(cell), true));
+                            cell.getCount() == 0 ? 0 : coarse.p95Ms(), fineMinutes, latencyOf(cell), true,
+                            cell.getClientErrors(), cell.getServerErrors()));
                     collect(series, cell, index, count);
                     total.add(cell);
                     continue;
@@ -364,7 +368,7 @@ public class ApiDashboardService {
     private static ApiDashboardResponse.TrendPoint point(Instant start, MetricsBucket data, int spanMinutes) {
         return new ApiDashboardResponse.TrendPoint(start, data.getCount(),
                 data.getClientErrors() + data.getServerErrors(), average(data.getDurationSumMs(), data.getCount()),
-                data.p95Ms(), spanMinutes, latencyOf(data), false);
+                data.p95Ms(), spanMinutes, latencyOf(data), false, data.getClientErrors(), data.getServerErrors());
     }
 
     private static ApiDashboardResponse.Summary summary(MetricsBucket bucket) {
