@@ -313,17 +313,27 @@ public class BoardMarketReportService {
             }
         }
         Movers movers = null;
-        // 급등·급락은 Alpha Vantage에만 있고 최신 거래일 것만 있음. 못 받아도 나머지로 만듦(급등·급락 카드만 빠짐).
-        if (us != null && !usLimitReached && !spy.isEmpty() && spy.getFirst().date().equals(basis.get())) {
-            try {
-                if (moversCache == null) moversCache = us.movers();
-                movers = moversCache;
-            } catch (UsMarketClient.LimitReachedException exception) {
-                usLimitReached = true;
-                log.warn("Market report US movers skipped: Alpha Vantage daily limit reached.");
-            } catch (IOException exception) {
-                log.warn("Market report US movers skipped. reason={}", exception.getMessage());
+        // 급등·급락·거래 상위: Yahoo 스크리너 먼저, 안 되면 Alpha Vantage. 최신 거래일 것만 있음.
+        // 못 받아도 나머지로 만듦(순위 칸만 빠짐).
+        if (!spy.isEmpty() && spy.getFirst().date().equals(basis.get())) {
+            if (moversCache == null && yahoo != null) {
+                try {
+                    moversCache = yahoo.movers();
+                } catch (IOException exception) {
+                    log.warn("Market report Yahoo movers failed. reason={}", exception.getMessage());
+                }
             }
+            if (moversCache == null && us != null && !usLimitReached) {
+                try {
+                    moversCache = us.movers();
+                } catch (UsMarketClient.LimitReachedException exception) {
+                    usLimitReached = true;
+                    log.warn("Market report US movers skipped: Alpha Vantage daily limit reached.");
+                } catch (IOException exception) {
+                    log.warn("Market report US movers skipped. reason={}", exception.getMessage());
+                }
+            }
+            movers = moversCache;
         }
         return MarketReportBuilder.usSection(basis.get(), all, movers);
     }

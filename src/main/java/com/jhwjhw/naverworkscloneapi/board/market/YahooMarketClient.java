@@ -71,6 +71,52 @@ public class YahooMarketClient {
         return unique;
     }
 
+    static final String SCREENER = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=25&scrIds=";
+
+    // 급등·급락·거래 많은 종목(Yahoo 미리 정한 스크리너). 날짜는 시세 시각(뉴욕)의 날짜 — 장 마감 뒤에는 그날 것.
+    public UsMarketClient.Movers movers() throws IOException {
+        List<UsMarketClient.Mover> gainers = screener("day_gainers");
+        List<UsMarketClient.Mover> losers = screener("day_losers");
+        List<UsMarketClient.Mover> active = screener("most_actives");
+        LocalDate date = lastDate;
+        if (date == null) throw new IOException("Yahoo screener has no market time.");
+        return new UsMarketClient.Movers(date, gainers, losers, active);
+    }
+
+    // 마지막으로 읽은 스크리너의 시세 날짜(세 목록이 같은 날 것)
+    private LocalDate lastDate;
+
+    private List<UsMarketClient.Mover> screener(String id) throws IOException {
+        String body = http.get(URI.create(SCREENER + id));
+        Map<?, ?> root;
+        try {
+            root = objectMapper.readValue(body, Map.class);
+        } catch (JacksonException exception) {
+            throw new IOException("Yahoo screener returned non-JSON. id=" + id);
+        }
+        Map<?, ?> finance = map(root.get("finance"));
+        if (!(finance.get("result") instanceof List<?> results) || results.isEmpty()) {
+            throw new IOException("Yahoo screener has no result. id=" + id);
+        }
+        List<UsMarketClient.Mover> result = new ArrayList<>();
+        if (!(map(results.getFirst()).get("quotes") instanceof List<?> quotes)) return result;
+        for (Object value : quotes) {
+            Map<?, ?> quote = map(value);
+            String ticker = KoreaMarketClient.text(quote.get("symbol"));
+            BigDecimal price = KoreaMarketClient.number(quote.get("regularMarketPrice"));
+            BigDecimal change = KoreaMarketClient.number(quote.get("regularMarketChangePercent"));
+            BigDecimal volume = KoreaMarketClient.number(quote.get("regularMarketVolume"));
+            if (ticker == null || price == null || change == null) continue;
+            String name = KoreaMarketClient.text(quote.get("shortName"));
+            if (quote.get("regularMarketTime") instanceof Number seconds) {
+                lastDate = Instant.ofEpochSecond(seconds.longValue()).atZone(NEW_YORK).toLocalDate();
+            }
+            result.add(new UsMarketClient.Mover(ticker, name, price, change.setScale(2, java.math.RoundingMode.HALF_UP),
+                    volume == null ? 0 : volume.longValue()));
+        }
+        return result;
+    }
+
     private static Map<?, ?> map(Object value) {
         return value instanceof Map<?, ?> map ? map : Map.of();
     }

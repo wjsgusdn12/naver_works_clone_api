@@ -34,7 +34,7 @@ public final class MarketReportBuilder {
 
     // 만든 부분의 형식 번호. 보고 모양을 바꾸면 올려서, 예전 형식으로 저장된 지난 글을 새 형식으로 다시 만들게 함.
     // (저장해 둔 부분 JSON에만 남고, 게시글 본문에서는 본문 검사가 떼어 냄)
-    public static final int FORMAT = 4;
+    public static final int FORMAT = 5;
     private static final String FORMAT_MARK = "\"format\":" + FORMAT;
 
     public static boolean isCurrent(String sectionJson) {
@@ -254,14 +254,14 @@ public final class MarketReportBuilder {
             blocks.add(paragraph(text(bigTechSummary(tech, changes))));
         }
 
-        if (!gainers.isEmpty() || !losers.isEmpty()) {
+        // 한국처럼 순위 3칸: 상승률 · 하락률 · 거래량
+        if (!gainers.isEmpty() || !losers.isEmpty() || !active.isEmpty()) {
             List<Map<String, Object>> groups = new ArrayList<>();
-            if (!gainers.isEmpty()) groups.add(rankGroup("급등", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
-            if (!losers.isEmpty()) groups.add(rankGroup("급락", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
-            if (!groups.isEmpty()) {
-                blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
-                blocks.add(paragraph(tone("급등·급락은 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다.", "muted")));
-            }
+            if (!gainers.isEmpty()) groups.add(rankGroup("상승률 상위", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!losers.isEmpty()) groups.add(rankGroup("하락률 상위", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!active.isEmpty()) groups.add(rankGroup("거래량 상위", "info", active.stream().map(MarketReportBuilder::moverRow).toList()));
+            blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
+            blocks.add(paragraph(tone("순위는 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다.", "muted")));
         }
 
         blocks.add(heading(3, "오늘 한국장 체크포인트"));
@@ -389,7 +389,9 @@ public final class MarketReportBuilder {
     }
 
     private static Map<String, Object> moverRow(Mover mover) {
-        return rankRow(mover.ticker(), usd(mover.price()), mover.changePercent(), "거래량 " + compact(mover.volume()));
+        // 이름 칸은 종목 기호, 그 옆 작은 글자는 회사 이름(있으면) · 거래량
+        String sub = (mover.name() != null ? mover.name() + " · " : "") + "거래량 " + compact(mover.volume());
+        return rankRow(mover.ticker(), usd(mover.price()), mover.changePercent(), sub);
     }
 
     // ───────────── 한국 ─────────────

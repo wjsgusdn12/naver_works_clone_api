@@ -24,8 +24,8 @@ public class UsMarketClient {
     public record DailyBar(LocalDate date, BigDecimal close, long volume) {
     }
 
-    // 급등·급락·거래 상위 한 줄. changePercent는 % 숫자(예: 12.34)
-    public record Mover(String ticker, BigDecimal price, BigDecimal changePercent, long volume) {
+    // 급등·급락·거래 상위 한 줄. changePercent는 % 숫자(예: 12.34), name은 회사 이름(모르면 null)
+    public record Mover(String ticker, String name, BigDecimal price, BigDecimal changePercent, long volume) {
     }
 
     // date: 이 목록이 기준으로 한 거래일(last_updated의 날짜)
@@ -99,7 +99,7 @@ public class UsMarketClient {
             BigDecimal change = KoreaMarketClient.number(percent == null ? null : percent.replace("%", ""));
             BigDecimal volume = KoreaMarketClient.number(row.get("volume"));
             if (ticker != null && price != null && change != null) {
-                result.add(new Mover(ticker, price, change, volume == null ? 0 : volume.longValue()));
+                result.add(new Mover(ticker, null, price, change, volume == null ? 0 : volume.longValue()));
             }
         }
         return result;
