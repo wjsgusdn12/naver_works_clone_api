@@ -20,6 +20,10 @@ app:
     min-free-bytes: 0
     # 사진을 여러 장 올리는 테스트가 막히지 않도록 크게(제한 자체는 ChatAttachmentTests에서 따로 검증).
     uploads-per-minute: 1000
+  board:
+    # 매일 인사 글 예약 작업은 테스트 중 끼어들지 않게 끔(올리는 동작 자체는 BoardDailyGreetingTests에서 직접 호출).
+    daily-greeting:
+      enabled: false
   cors:
     allowed-origin: http://localhost:3000
   auth:
