@@ -32,9 +32,21 @@ public class NewsClient {
     private static final java.util.regex.Pattern MARKET_WORDS = java.util.regex.Pattern.compile(
             "증시|코스피|코스닥|주가|환율|달러|금리|국채|채권|한은|연준|Fed|반도체|수출|물가|유가|실적|외국인|공매도|IPO|상장");
 
-    // category: 화면에 붙는 분류 딱지(경제·주요·종합)
-    public record Article(String category, String title, String source, String link, ZonedDateTime publishedAt) {
+    // category: 화면에 붙는 분류(주요·경제·시장). summary: RSS가 준 첫 문장 요약(연합뉴스, 없으면 null).
+    // related: 같은 소식을 다룬 다른 언론사 보도(Google 뉴스 묶음, 없으면 빈 목록)
+    public record Article(String category, String title, String source, String link, ZonedDateTime publishedAt,
+            String summary, List<Related> related) {
     }
+
+    public record Related(String title, String source, String link) {
+    }
+
+    // Google 뉴스 설명란의 묶음 기사: <a href="주소">제목</a>&nbsp;&nbsp;<font ...>언론사</font>
+    private static final java.util.regex.Pattern RELATED = java.util.regex.Pattern.compile(
+            "<a href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>(?:&nbsp;|\\s)*<font[^>]*>(.*?)</font>");
+    // 연합뉴스 요약 앞머리 "(서울=연합뉴스) 홍길동 기자 = "
+    private static final java.util.regex.Pattern BYLINE = java.util.regex.Pattern.compile(
+            "^\\([^)]{1,30}=[^)]{1,20}\\)\\s*(?:[^=]{1,40}=\\s*)?");
 
     // 사진·인사·부고처럼 "메인 뉴스"로 보기 어려운 기사 머리말
     private static final List<String> SKIP_PREFIXES = List.of("[포토]", "[그래픽]", "[사진]", "[인사]", "[부고]", "[게시판]",
@@ -110,9 +122,35 @@ public class NewsClient {
             if (fixedSource == null && source != null && title.endsWith(" - " + source)) {
                 title = title.substring(0, title.length() - source.length() - 3).strip();
             }
-            result.add(new Article(category, title, source == null ? "" : source, link, date(child(item, "pubDate"))));
+            String description = child(item, "description");
+            String summary = null;
+            List<Related> related = new ArrayList<>();
+            if (description != null && description.contains("<a ")) {
+                // Google 뉴스: 첫 줄은 이 기사 자신이라 빼고 나머지 묶음 기사
+                java.util.regex.Matcher matcher = RELATED.matcher(description);
+                while (matcher.find() && related.size() < 4) {
+                    String relatedTitle = unescape(strip(matcher.group(2)));
+                    String relatedSource = unescape(strip(matcher.group(3)));
+                    if (relatedTitle.isEmpty() || relatedTitle.equals(title)) continue;
+                    related.add(new Related(relatedTitle, relatedSource, matcher.group(1)));
+                }
+            } else if (description != null) {
+                summary = BYLINE.matcher(unescape(strip(description))).replaceFirst("").strip();
+                if (summary.isEmpty() || summary.equals(title)) summary = null;
+            }
+            result.add(new Article(category, title, source == null ? "" : source, link, date(child(item, "pubDate")),
+                    summary, related));
         }
         return result;
+    }
+
+    private static String strip(String html) {
+        return html.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ").strip();
+    }
+
+    private static String unescape(String text) {
+        return text.replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&amp;", "&").strip();
     }
 
     private static String child(Element item, String name) {

@@ -88,12 +88,15 @@ final class MarketBlocks {
                     put(clean, "title", item.get("title"), text);
                     put(clean, "source", item.get("source"), text);
                     put(clean, "time", item.get("time"), text);
-                    // 원문 링크는 http·https만(javascript: 등은 버림)
-                    if (item.get("href") instanceof String href && href.length() <= 2048
-                            && (href.startsWith("https://") || href.startsWith("http://"))
-                            && BoardContent.safeHref(href)) {
-                        clean.put("href", href);
-                    }
+                    putLong(clean, "summary", item.get("summary"), 400, text);
+                    putHref(clean, item.get("href"));
+                    clean.put("related", list(item.get("related"), 4, related -> {
+                        Map<String, Object> row = new LinkedHashMap<>();
+                        put(row, "title", related.get("title"), text);
+                        put(row, "source", related.get("source"), text);
+                        putHref(row, related.get("href"));
+                        return row;
+                    }));
                     return clean;
                 }));
             }
@@ -139,6 +142,24 @@ final class MarketBlocks {
         if (clean.length() > MAX_TEXT) clean = clean.substring(0, MAX_TEXT);
         target.put(key, clean);
         text.accept(clean + " ");
+    }
+
+    // 요약처럼 긴 글(최대 max자)
+    private static void putLong(Map<String, Object> target, String key, Object value, int max, Consumer<String> text) {
+        if (!(value instanceof String string)) return;
+        String clean = string.replaceAll("[\\p{Cntrl}]", " ").strip();
+        if (clean.isEmpty()) return;
+        if (clean.length() > max) clean = clean.substring(0, max);
+        target.put(key, clean);
+        text.accept(clean + " ");
+    }
+
+    // 원문 링크는 http·https만(javascript: 등은 버림)
+    private static void putHref(Map<String, Object> target, Object value) {
+        if (value instanceof String href && href.length() <= 2048
+                && (href.startsWith("https://") || href.startsWith("http://")) && BoardContent.safeHref(href)) {
+            target.put("href", href);
+        }
     }
 
     private static void putEnum(Map<String, Object> target, String key, Object value, Set<String> allowed) {

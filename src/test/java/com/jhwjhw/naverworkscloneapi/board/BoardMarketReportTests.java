@@ -114,7 +114,8 @@ class BoardMarketReportTests {
                 .contains("간밤 나스닥 강세")
                 // 뉴스: 사진 기사·중복·연합뉴스 중복 출처는 빠지고, 구글 제목 끝 언론사는 떼어 냄
                 .contains("오늘의 주요 뉴스").contains("가상 반도체 수출 사상 최대").contains("가상 환율 1,300원대")
-                .contains("가상경제신문").doesNotContain("[포토]").doesNotContain("- 가상경제신문 ");
+                .contains("가상경제신문").contains("가상 반도체 수출이 한 달 만에 사상 최대를 기록했다.")
+                .doesNotContain("홍길동 기자").contains("가상 원화 약세 이어져").contains("가상일보").doesNotContain("[포토]").doesNotContain("- 가상경제신문 ");
         assertThat(morning.getNewsDoneAt()).isNotNull();
         assertThat(post.getContentJson()).contains("\"type\":\"marketNews\"").contains("https://example.com/news/1")
                 .doesNotContain("\"format\"").contains("\"type\":\"marketHero\"").contains("\"type\":\"marketStats\"")
@@ -131,7 +132,7 @@ class BoardMarketReportTests {
         assertThat(afternoon.getLeaseUntil()).isNull();
         post = posts.findById(afternoon.getPostId()).orElseThrow();
         assertThat(post.getContentText()).contains("한국 증시 11월 2일(월) 마감").contains("코스피는 1.20% 올라 2,612.45")
-                .contains("시가총액 TOP 10").contains("가상전자").contains("거래대금 TOP").contains("오름 2 보합 0 내림 1")
+                .contains("시가총액 상위 10").contains("가상전자").contains("거래대금 상위").contains("오름 2 보합 0 내림 1")
                 .doesNotContain("한국 증시 분석은 오후 2시 이후").contains("미국 증시 11월 2일(월) 마감");
         assertThat(post.getContentJson()).contains("\"type\":\"marketBreadth\"");
         assertThat(post.getContentText()).contains("한국 시장 이야기").contains("시장 체감").contains("돈의 흐름")
@@ -228,6 +229,7 @@ class BoardMarketReportTests {
             <item><title><![CDATA[[포토] 가상 시장 풍경]]></title><link>https://example.com/news/photo</link>
               <pubDate>Tue, 3 Nov 2026 08:30:00 +0900</pubDate></item>
             <item><title><![CDATA[가상 반도체 수출 사상 최대]]></title><link>https://example.com/news/1</link>
+              <description><![CDATA[(서울=연합뉴스) 홍길동 기자 = 가상 반도체 수출이 한 달 만에 사상 최대를 기록했다.]]></description>
               <pubDate>Tue, 3 Nov 2026 08:00:00 +0900</pubDate></item>
             <item><title><![CDATA[가상 오래된 기사]]></title><link>https://example.com/news/old</link>
               <pubDate>Sun, 1 Nov 2026 08:00:00 +0900</pubDate></item>
@@ -248,7 +250,8 @@ class BoardMarketReportTests {
             <?xml version="1.0" encoding="UTF-8"?>
             <rss version="2.0"><channel>
             <item><title>가상 환율 1,300원대 - 가상경제신문</title><link>https://example.com/news/3</link>
-              <pubDate>Mon, 02 Nov 2026 23:00:00 GMT</pubDate><source url="https://example.com">가상경제신문</source></item>
+              <pubDate>Mon, 02 Nov 2026 23:00:00 GMT</pubDate><source url="https://example.com">가상경제신문</source>
+              <description>&lt;ol&gt;&lt;li&gt;&lt;a href="https://example.com/news/3" target="_blank"&gt;가상 환율 1,300원대&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;가상경제신문&lt;/font&gt;&lt;/li&gt;&lt;li&gt;&lt;a href="https://example.com/news/3b" target="_blank"&gt;가상 원화 약세 이어져&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;가상일보&lt;/font&gt;&lt;/li&gt;&lt;/ol&gt;</description></item>
             <item><title>가상 연합 기사 - 연합뉴스</title><link>https://example.com/news/4</link>
               <pubDate>Mon, 02 Nov 2026 23:00:00 GMT</pubDate><source url="https://example.com">연합뉴스</source></item>
             </channel></rss>

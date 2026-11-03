@@ -34,7 +34,7 @@ public final class MarketReportBuilder {
 
     // 만든 부분의 형식 번호. 보고 모양을 바꾸면 올려서, 예전 형식으로 저장된 지난 글을 새 형식으로 다시 만들게 함.
     // (저장해 둔 부분 JSON에만 남고, 게시글 본문에서는 본문 검사가 떼어 냄)
-    public static final int FORMAT = 3;
+    public static final int FORMAT = 4;
     private static final String FORMAT_MARK = "\"format\":" + FORMAT;
 
     public static boolean isCurrent(String sectionJson) {
@@ -70,10 +70,10 @@ public final class MarketReportBuilder {
         blocks.add(paragraph(text(greeting)));
         if (news != null) blocks.addAll(news);
         if (us != null) blocks.addAll(us);
-        else if (usEnabled) blocks.addAll(pending("us", "미국 증시", "⏳ 간밤 미국 증시 분석을 불러오는 중입니다."));
+        else if (usEnabled) blocks.addAll(pending("us", "미국 증시", "간밤 미국 증시 분석을 불러오는 중입니다."));
         if (kr != null) blocks.addAll(kr);
         else if (krEnabled) {
-            blocks.addAll(pending("kr", "한국 증시", "⏳ 한국 증시 분석은 오후 2시 이후에 추가됩니다. "
+            blocks.addAll(pending("kr", "한국 증시", "한국 증시 분석은 오후 2시 이후에 추가됩니다. "
                     + "(공공데이터 시세가 다음 영업일 오후 1시 이후에 올라옵니다)"));
         }
         if (report) {
@@ -113,6 +113,9 @@ public final class MarketReportBuilder {
                         + String.format(Locale.ROOT, "%02d:%02d", local.getHour(), local.getMinute()));
             }
             item.put("href", article.link());
+            if (article.summary() != null) item.put("summary", article.summary());
+            item.put("related", article.related().stream().map(related -> Map.of("title", related.title(),
+                    "source", related.source(), "href", related.link())).toList());
             items.add(item);
         }
         return Optional.of(List.of(Map.of("type", "marketNews", "attrs",
@@ -218,13 +221,13 @@ public final class MarketReportBuilder {
         List<Mover> active = movers != null && basis.equals(movers.date()) ? filterMovers(movers.active()) : List.of();
 
         // 📖 시장 이야기: 추세 → 빅테크 → 특징주 순서로 풀어 씀
-        blocks.add(heading(3, "📖 미국 시장 이야기"));
+        blocks.add(heading(3, "미국 시장 이야기"));
         String spyStory = trendSentence("S&P 500은", spyTrend);
         String qqqStory = trendSentence("나스닥 100은", qqqTrend);
         if (!spyStory.isEmpty() || !qqqStory.isEmpty()) {
-            blocks.add(story("📈 흐름", (spyStory + " " + qqqStory).strip()));
+            blocks.add(story("흐름", (spyStory + " " + qqqStory).strip()));
         }
-        if (!tech.isEmpty()) blocks.add(story("🧑‍💻 빅테크", techStory(tech, changes, series, basis)));
+        if (!tech.isEmpty()) blocks.add(story("빅테크", techStory(tech, changes, series, basis)));
         if (!gainers.isEmpty() || !losers.isEmpty() || !active.isEmpty()) {
             List<String> parts = new ArrayList<>();
             if (!gainers.isEmpty()) {
@@ -241,7 +244,7 @@ public final class MarketReportBuilder {
                         + compact(active.getFirst().volume()) + ", " + pct(active.getFirst().changePercent().doubleValue())
                         + ")입니다.";
             }
-            blocks.add(story("🔥 특징주", text.strip()));
+            blocks.add(story("특징주", text.strip()));
         }
 
         if (!tech.isEmpty()) {
@@ -253,15 +256,15 @@ public final class MarketReportBuilder {
 
         if (!gainers.isEmpty() || !losers.isEmpty()) {
             List<Map<String, Object>> groups = new ArrayList<>();
-            if (!gainers.isEmpty()) groups.add(rankGroup("🚀 급등 TOP", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
-            if (!losers.isEmpty()) groups.add(rankGroup("🧊 급락 TOP", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!gainers.isEmpty()) groups.add(rankGroup("급등", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!losers.isEmpty()) groups.add(rankGroup("급락", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
             if (!groups.isEmpty()) {
                 blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
                 blocks.add(paragraph(tone("급등·급락은 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다.", "muted")));
             }
         }
 
-        blocks.add(heading(3, "✅ 오늘 한국장 체크포인트"));
+        blocks.add(heading(3, "오늘 한국장 체크포인트"));
         blocks.add(checklist(usCheckpoints(changes, spyTrend)));
         return Optional.of(blocks);
     }
@@ -424,12 +427,12 @@ public final class MarketReportBuilder {
 
             List<StockQuote> caps = rated.stream().filter(stock -> stock.marketCap() != null)
                     .sorted(Comparator.comparing(StockQuote::marketCap).reversed()).limit(10).toList();
-            blocks.add(heading(3, "📖 한국 시장 이야기"));
+            blocks.add(heading(3, "한국 시장 이야기"));
             blocks.addAll(krStory(kospi.get(), kosdaq.orElse(null), rated, caps, histories, basis));
             if (!caps.isEmpty()) {
                 List<Map<String, Object>> tiles = caps.stream().map(stock -> tile(stock.name(),
                         "시총 " + won(stock.marketCap()) + " · " + price(stock.close()), stock.rate())).toList();
-                blocks.add(Map.of("type", "marketHeatmap", "attrs", Map.of("title", "시가총액 TOP 10", "items", tiles)));
+                blocks.add(Map.of("type", "marketHeatmap", "attrs", Map.of("title", "시가총액 상위 10", "items", tiles)));
                 StockQuote mover = caps.stream().max(Comparator.comparing(stock -> stock.rate().abs())).orElseThrow();
                 blocks.add(paragraph(text("시가총액 상위 종목 중 가장 크게 움직인 종목은 " + mover.name() + "("
                         + signed(mover.rate()) + "%)입니다.")));
@@ -444,18 +447,18 @@ public final class MarketReportBuilder {
             List<StockQuote> busiest = liquid.stream()
                     .sorted(Comparator.comparing(StockQuote::tradeValue).reversed()).limit(5).toList();
             List<Map<String, Object>> groups = new ArrayList<>();
-            if (!gainers.isEmpty()) groups.add(rankGroup("🚀 상승률 TOP", "up", gainers.stream().map(stock ->
+            if (!gainers.isEmpty()) groups.add(rankGroup("상승률 상위", "up", gainers.stream().map(stock ->
                     rankRow(stock.name(), price(stock.close()), stock.rate(), marketName(stock))).toList()));
-            if (!losers.isEmpty()) groups.add(rankGroup("🧊 하락률 TOP", "down", losers.stream().map(stock ->
+            if (!losers.isEmpty()) groups.add(rankGroup("하락률 상위", "down", losers.stream().map(stock ->
                     rankRow(stock.name(), price(stock.close()), stock.rate(), marketName(stock))).toList()));
-            if (!busiest.isEmpty()) groups.add(rankGroup("💰 거래대금 TOP", "info", busiest.stream().map(stock ->
+            if (!busiest.isEmpty()) groups.add(rankGroup("거래대금 상위", "info", busiest.stream().map(stock ->
                     rankRow(stock.name(), won(stock.tradeValue()), stock.rate(), marketName(stock))).toList()));
             if (!groups.isEmpty()) {
                 blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
                 blocks.add(paragraph(tone("상승률·하락률·거래대금 순위는 거래대금 10억 원 이상 종목만 모았습니다.", "muted")));
             }
         }
-        blocks.add(heading(3, "✅ 다음 거래일 체크포인트"));
+        blocks.add(heading(3, "다음 거래일 체크포인트"));
         blocks.add(checklist(krCheckpoints(kospi.get(), rated, histories, basis)));
         return Optional.of(blocks);
     }
@@ -472,7 +475,7 @@ public final class MarketReportBuilder {
         List<Map<String, Object>> blocks = new ArrayList<>();
         String flow = (trendSentence("코스피는", trend(closes(histories, "코스피", basis))) + " "
                 + (kosdaq == null ? "" : trendSentence("코스닥은", trend(closes(histories, "코스닥", basis))))).strip();
-        if (!flow.isEmpty()) blocks.add(story("📈 흐름", flow));
+        if (!flow.isEmpty()) blocks.add(story("흐름", flow));
 
         long up = stocks.stream().filter(stock -> stock.rate().signum() > 0).count();
         long down = stocks.stream().filter(stock -> stock.rate().signum() < 0).count();
@@ -483,7 +486,7 @@ public final class MarketReportBuilder {
         else if (kospi.rate().signum() < 0 && ratio > 0.55) breadth += " 지수는 내렸지만 오른 종목이 많아 개별 종목은 선방했습니다.";
         else if (ratio >= 0.65) breadth += " 대부분 종목이 함께 오른 '고른 강세'였습니다.";
         else if (ratio <= 0.35) breadth += " 대부분 종목이 함께 내린 '고른 약세'였습니다.";
-        blocks.add(story("🌡️ 시장 체감", breadth));
+        blocks.add(story("시장 체감", breadth));
 
         if (!caps.isEmpty()) {
             long capUp = caps.stream().filter(stock -> stock.rate().signum() > 0).count();
@@ -494,7 +497,7 @@ public final class MarketReportBuilder {
                         .append(i < Math.min(3, caps.size()) - 1 ? ", " : "");
             }
             big.append("의 움직임이 지수 방향을 좌우했습니다.");
-            blocks.add(story("🏢 대형주", big.toString()));
+            blocks.add(story("대형주", big.toString()));
         }
 
         BigDecimal total = stocks.stream().map(StockQuote::tradeValue).filter(Objects::nonNull)
@@ -505,7 +508,7 @@ public final class MarketReportBuilder {
             double topShare = busiest.getFirst().tradeValue().doubleValue() / total.doubleValue() * 100;
             double fiveShare = busiest.stream().mapToDouble(stock -> stock.tradeValue().doubleValue()).sum()
                     / total.doubleValue() * 100;
-            blocks.add(story("💰 돈의 흐름", String.format(Locale.ROOT,
+            blocks.add(story("돈의 흐름", String.format(Locale.ROOT,
                     "전체 거래대금은 %s입니다. 1위 %s에 %.1f%%, 상위 5종목에 %.1f%%가 몰렸습니다.", won(total),
                     busiest.getFirst().name(), topShare, fiveShare)
                     + (topShare >= 10 ? " 한 종목 쏠림이 강한 하루였습니다." : "")));
@@ -516,7 +519,7 @@ public final class MarketReportBuilder {
         if (upperLimit + lowerLimit > 0) {
             String names = stocks.stream().filter(stock -> stock.rate().doubleValue() >= 29.5).limit(3)
                     .map(StockQuote::name).reduce((a, b) -> a + ", " + b).map(list -> " (" + list + " 등)").orElse("");
-            blocks.add(story("🚨 상·하한가", "상한가 " + upperLimit + "개" + names + ", 하한가 " + lowerLimit + "개가 나왔습니다."));
+            blocks.add(story("상·하한가", "상한가 " + upperLimit + "개" + names + ", 하한가 " + lowerLimit + "개가 나왔습니다."));
         }
         return blocks;
     }
