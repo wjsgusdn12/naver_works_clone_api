@@ -45,15 +45,32 @@ public class KoreaMarketClient {
         this.serviceKey = serviceKey;
     }
 
-    // before 전날까지(10일 안) 코스피 지수가 있는 마지막 거래일. 아직 안 올라왔으면 그 앞 거래일이 나옴.
+    // 지수의 날짜별 종가(추이 그래프용)
+    public record IndexClose(LocalDate date, BigDecimal close) {
+    }
+
+    // before 전날까지 코스피 지수가 있는 마지막 거래일. 아직 안 올라왔으면 그 앞 거래일이 나옴.
     public Optional<LocalDate> latestTradingDay(LocalDate before) throws IOException {
+        return history("코스피", before).stream().map(IndexClose::date).max(LocalDate::compareTo);
+    }
+
+    // before 전날까지 약 45일(30거래일 남짓)의 종가, 오래된 날짜부터
+    public List<IndexClose> history(String name, LocalDate before) throws IOException {
         Map<String, String> params = new LinkedHashMap<>();
-        params.put("idxNm", "코스피");
-        params.put("beginBasDt", before.minusDays(10).format(BAS_DT));
+        params.put("idxNm", name);
+        params.put("beginBasDt", before.minusDays(45).format(BAS_DT));
         params.put("endBasDt", before.format(BAS_DT));
-        params.put("numOfRows", "30");
-        return items(INDEX_URL, params).stream().map(item -> date(item.get("basDt")))
-                .filter(date -> date != null && date.isBefore(before)).max(LocalDate::compareTo);
+        params.put("numOfRows", "60");
+        List<IndexClose> result = new ArrayList<>();
+        for (Map<String, Object> item : items(INDEX_URL, params)) {
+            LocalDate date = date(item.get("basDt"));
+            BigDecimal close = number(item.get("clpr"));
+            if (date != null && close != null && date.isBefore(before) && name.equals(text(item.get("idxNm")))) {
+                result.add(new IndexClose(date, close));
+            }
+        }
+        result.sort(java.util.Comparator.comparing(IndexClose::date));
+        return result;
     }
 
     // 그날 코스피·코스닥 지수(이름 순서대로, 없는 것은 빠짐)

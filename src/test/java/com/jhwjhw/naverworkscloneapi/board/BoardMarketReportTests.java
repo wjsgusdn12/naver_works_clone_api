@@ -99,10 +99,15 @@ class BoardMarketReportTests {
         assertThat(morning.getKrDoneAt()).isNull();
         BoardPost post = posts.findById(morning.getPostId()).orElseThrow();
         assertThat(post.getContentText()).contains(BoardDailyGreetingService.CONTENT_TEXT)
-                .contains("미국 증시 · 11월 2일(월) 마감").contains("S&P 500 (SPY)").contains("+1.00%")
+                .contains("Daily Market Report").contains("2026년 11월 3일 (화)")
+                .contains("미국 증시 11월 2일(월) 마감").contains("S&P 500").contains("+1.00%").contains("상승")
                 .contains("기술주").contains("빅테크 7개 중").contains("FAKEUP").doesNotContain("PENNY")
                 .contains("한국 증시 분석은 오후 2시 이후");
-        assertThat(post.getContentJson()).contains("\"tone\":\"up\"").contains("\"type\":\"table\"");
+        assertThat(post.getContentJson()).contains("\"type\":\"marketHero\"").contains("\"type\":\"marketStats\"")
+                .contains("\"type\":\"marketHeatmap\"").contains("\"type\":\"marketRanks\"").contains("\"spark\"")
+                .contains("\"tone\":\"up\"");
+        // 시스템이 채워도 바뀐 것을 알 수 있게 "(수정됨)" 시각이 남음
+        assertThat(post.getUpdatedAt()).isNotNull();
 
         // 오후 2시 10분: 한국 채움(미국은 다시 받지 않음)
         int before = calls.get();
@@ -111,15 +116,15 @@ class BoardMarketReportTests {
         assertThat(afternoon.getKrDoneAt()).isNotNull();
         assertThat(afternoon.getLeaseUntil()).isNull();
         post = posts.findById(afternoon.getPostId()).orElseThrow();
-        assertThat(post.getContentText()).contains("한국 증시 · 11월 2일(월) 마감").contains("코스피는 1.20% 올라 2,612.45")
-                .contains("시가총액 상위 10").contains("가상전자").contains("거래대금 상위")
-                .doesNotContain("한국 증시 분석은 오후 2시 이후").contains("미국 증시 · 11월 2일(월) 마감");
+        assertThat(post.getContentText()).contains("한국 증시 11월 2일(월) 마감").contains("코스피는 1.20% 올라 2,612.45")
+                .contains("시가총액 TOP 10").contains("가상전자").contains("거래대금 TOP").contains("오름 2 보합 0 내림 1")
+                .doesNotContain("한국 증시 분석은 오후 2시 이후").contains("미국 증시 11월 2일(월) 마감");
+        assertThat(post.getContentJson()).contains("\"type\":\"marketBreadth\"");
         // 거래대금 10억 원 미만 종목은 급등 목록에서 빠짐
         assertThat(post.getContentText()).doesNotContain("가상소형");
-        // 시스템이 채운 것이라 "(수정됨)" 시각은 그대로
-        assertThat(post.getUpdatedAt()).isNull();
-        // 한국: 지수 범위 1 + 지수 2 + 종목 1
-        assertThat(calls.get() - before).isEqualTo(4);
+        assertThat(post.getUpdatedAt()).isNotNull();
+        // 한국: 코스피 추이 1 + 지수 2 + 코스닥 추이 1 + 종목 1
+        assertThat(calls.get() - before).isEqualTo(5);
     }
 
     @Test

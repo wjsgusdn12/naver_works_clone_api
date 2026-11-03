@@ -1,5 +1,6 @@
 package com.jhwjhw.naverworkscloneapi.board.market;
 
+import com.jhwjhw.naverworkscloneapi.board.market.KoreaMarketClient.IndexClose;
 import com.jhwjhw.naverworkscloneapi.board.market.KoreaMarketClient.IndexQuote;
 import com.jhwjhw.naverworkscloneapi.board.market.KoreaMarketClient.StockQuote;
 import com.jhwjhw.naverworkscloneapi.board.market.UsMarketClient.DailyBar;
@@ -11,6 +12,7 @@ import java.text.DecimalFormat;
 import java.time.LocalDate;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,17 +22,20 @@ import java.util.Objects;
 import java.util.Optional;
 
 // 받은 시세 숫자로 게시글 본문(편집기 문서 노드)을 만드는 규칙 모음. AI 없이 정해진 기준으로 문장을 고름.
-// 오름은 빨강(tone=up), 내림은 파랑(tone=down) — 한국 증시 표기 관례. 화면은 RichContent가 tone 서식을 색으로 그림.
+// 화면 꾸밈은 증시 전용 블록(marketHero·marketBanner·callout·marketStats·marketBreadth·marketHeatmap·marketRanks)으로
+// 내려보내고, 프론트 RichContent가 카드·추이 그래프·히트맵으로 그림. 오름 빨강·내림 파랑(한국 증시 표기).
 public final class MarketReportBuilder {
     // 미국 지수는 지수 자체 대신 지수를 따라가는 대표 ETF 시세로 보여 줌(무료 API에 지수가 없음)
     public static final Map<String, String> US_INDEX_ETFS = ordered(
-            "SPY", "S&P 500 (SPY)", "QQQ", "나스닥 100 (QQQ)", "DIA", "다우존스 (DIA)", "IWM", "러셀 2000 (IWM)");
+            "SPY", "S&P 500", "QQQ", "나스닥 100", "DIA", "다우존스", "IWM", "러셀 2000");
     public static final Map<String, String> US_BIG_TECH = ordered(
             "AAPL", "애플", "MSFT", "마이크로소프트", "NVDA", "엔비디아", "AMZN", "아마존", "GOOGL", "알파벳",
             "META", "메타", "TSLA", "테슬라");
 
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal EOK = new BigDecimal("100000000");
+    // 추이 그래프에 넣는 최근 거래일 수
+    private static final int SPARK_DAYS = 20;
     // 한국 급등·급락 목록에서 거래가 거의 없는 종목을 빼는 기준(거래대금 10억 원)
     private static final BigDecimal KR_MIN_TRADE_VALUE = new BigDecimal("1000000000");
     // 미국 급등·급락 목록에서 동전주·거래 적은 종목을 빼는 기준
@@ -42,37 +47,41 @@ public final class MarketReportBuilder {
 
     // ───────────── 글 전체 ─────────────
 
-    // 인사 문구 + 미국 부분 + 한국 부분 + 안내. 부분이 null이면 기능이 켜진 경우에만 "준비 중" 안내를 넣음.
-    public static Map<String, Object> document(String greeting, List<Map<String, Object>> us,
+    // 히어로 + 인사 문구 + 미국 부분 + 한국 부분 + 안내. 부분이 null이면 기능이 켜진 경우에만 "준비 중" 안내를 넣음.
+    // 둘 다 꺼져 있으면 예전처럼 인사 문구 한 줄만.
+    public static Map<String, Object> document(LocalDate date, String greeting, List<Map<String, Object>> us,
             List<Map<String, Object>> kr, boolean usEnabled, boolean krEnabled) {
         List<Map<String, Object>> blocks = new ArrayList<>();
-        blocks.add(paragraph(text(greeting)));
-        if (usEnabled || krEnabled) blocks.add(paragraph(text("오늘의 증시 브리핑입니다. 📈")));
-        if (us != null) blocks.addAll(us);
-        else if (usEnabled) {
-            blocks.add(heading(2, "🌎 미국 증시"));
-            blocks.add(paragraph(muted("⏳ 간밤 미국 증시 분석을 불러오는 중입니다.")));
+        boolean report = usEnabled || krEnabled;
+        if (report) {
+            blocks.add(Map.of("type", "marketHero", "attrs", Map.of("title", "Daily Market Report",
+                    "date", date.getYear() + "년 " + date.getMonthValue() + "월 " + date.getDayOfMonth() + "일 ("
+                            + weekday(date) + ")")));
         }
+        blocks.add(paragraph(text(greeting)));
+        if (us != null) blocks.addAll(us);
+        else if (usEnabled) blocks.addAll(pending("us", "미국 증시", "⏳ 간밤 미국 증시 분석을 불러오는 중입니다."));
         if (kr != null) blocks.addAll(kr);
         else if (krEnabled) {
-            blocks.add(heading(2, "🌏 한국 증시"));
-            blocks.add(paragraph(muted("⏳ 한국 증시 분석은 오후 2시 이후에 추가됩니다. "
-                    + "(공공데이터 시세가 다음 영업일 오후 1시 이후에 올라옵니다)")));
+            blocks.addAll(pending("kr", "한국 증시", "⏳ 한국 증시 분석은 오후 2시 이후에 추가됩니다. "
+                    + "(공공데이터 시세가 다음 영업일 오후 1시 이후에 올라옵니다)"));
         }
-        if (usEnabled || krEnabled) {
-            blocks.add(Map.of("type", "horizontalRule"));
-            blocks.add(Map.of("type", "blockquote", "content", List.of(paragraph(muted(
-                    "※ 시세 숫자로 자동 작성한 요약이며 투자 권유가 아닙니다. 미국 지수는 지수를 따라가는 대표 ETF 시세입니다. "
-                            + "출처: 금융위원회(공공데이터포털), Alpha Vantage")))));
+        if (report) {
+            blocks.add(callout("muted", paragraph(text("※ 시세 숫자로 자동 작성한 요약이며 투자 권유가 아닙니다. "
+                    + "미국 지수는 지수를 따라가는 대표 ETF 시세입니다. 출처: 금융위원회(공공데이터포털), Alpha Vantage"))));
         }
         return Map.of("type", "doc", "content", blocks);
     }
 
+    private static List<Map<String, Object>> pending(String market, String title, String message) {
+        return List.of(banner(market, title, "준비 중", null, null), callout("muted", paragraph(text(message))));
+    }
+
     // 끝내 데이터를 받지 못한 날의 부분
     public static List<Map<String, Object>> unavailable(String market) {
-        String icon = market.equals("미국") ? "🌎" : "🌏";
-        return List.of(heading(2, icon + " " + market + " 증시"),
-                paragraph(muted("이 날짜의 " + market + " 증시 데이터를 받지 못해 분석을 생략합니다.")));
+        String code = market.equals("미국") ? "us" : "kr";
+        return List.of(banner(code, market + " 증시", "데이터 없음", null, null),
+                callout("muted", paragraph(text("이 날짜의 " + market + " 증시 데이터를 받지 못해 분석을 생략합니다."))));
     }
 
     // ───────────── 미국 ─────────────
@@ -86,43 +95,39 @@ public final class MarketReportBuilder {
         }
         if (!changes.containsKey("SPY")) return Optional.empty();
 
+        double average = List.of("SPY", "QQQ", "DIA").stream().map(changes::get).filter(Objects::nonNull)
+                .mapToDouble(change -> change.rate().doubleValue()).average().orElse(0);
         List<Map<String, Object>> blocks = new ArrayList<>();
-        blocks.add(heading(2, "🌎 미국 증시 · " + dayLabel(basis) + " 마감"));
-        blocks.add(paragraph(text(usSummary(changes))));
+        blocks.add(banner("us", "미국 증시", dayLabel(basis) + " 마감", mood(average), moodLabel(average)));
+        blocks.add(callout(mood(average), paragraph(text(usSummary(changes)))));
 
-        List<List<Map<String, Object>>> rows = new ArrayList<>();
-        rows.add(headerRow("지수 (대표 ETF)", "종가", "전일 대비", "등락률"));
+        List<Map<String, Object>> stats = new ArrayList<>();
         US_INDEX_ETFS.forEach((symbol, label) -> {
             Change change = changes.get(symbol);
             if (change == null) return;
-            rows.add(List.of(cell(label), cellRight(text(usd(change.close()))),
-                    cellRight(signedChange(change.diff(), usd(change.diff().abs()))), cellRight(rate(change.rate()))));
+            stats.add(stat(label, usd(change.close()), arrow(change.diff(), usd(change.diff().abs())),
+                    change.rate(), symbol + " · 대표 ETF", spark(series.get(symbol), basis)));
         });
-        blocks.add(table(rows));
+        blocks.add(Map.of("type", "marketStats", "attrs", Map.of("items", stats)));
 
-        List<String> tech = US_BIG_TECH.keySet().stream().filter(changes::containsKey).toList();
+        List<String> tech = US_BIG_TECH.keySet().stream().filter(changes::containsKey)
+                .sorted(Comparator.comparing((String symbol) -> changes.get(symbol).rate()).reversed()).toList();
         if (!tech.isEmpty()) {
-            blocks.add(heading(3, "빅테크"));
-            List<List<Map<String, Object>>> techRows = new ArrayList<>();
-            techRows.add(headerRow("종목", "종가", "등락률", "거래량"));
-            tech.stream().sorted(Comparator.comparing((String symbol) -> changes.get(symbol).rate()).reversed())
-                    .forEach(symbol -> {
-                        Change change = changes.get(symbol);
-                        techRows.add(List.of(cell(US_BIG_TECH.get(symbol) + " (" + symbol + ")"),
-                                cellRight(text(usd(change.close()))), cellRight(rate(change.rate())),
-                                cellRight(text(compact(change.volume())))));
-                    });
-            blocks.add(table(techRows));
+            List<Map<String, Object>> tiles = tech.stream().map(symbol -> tile(US_BIG_TECH.get(symbol),
+                    symbol + " · " + usd(changes.get(symbol).close()), changes.get(symbol).rate())).toList();
+            blocks.add(Map.of("type", "marketHeatmap", "attrs", Map.of("title", "빅테크 7", "items", tiles)));
             blocks.add(paragraph(text(bigTechSummary(tech, changes))));
         }
 
         if (movers != null && basis.equals(movers.date())) {
             List<Mover> gainers = filterMovers(movers.gainers());
             List<Mover> losers = filterMovers(movers.losers());
-            if (!gainers.isEmpty() || !losers.isEmpty()) {
-                blocks.add(heading(3, "급등·급락 (주가 $5 이상, 거래량 100만 주 이상)"));
-                if (!gainers.isEmpty()) blocks.add(labeledList("🔺 급등", gainers));
-                if (!losers.isEmpty()) blocks.add(labeledList("🔻 급락", losers));
+            List<Map<String, Object>> groups = new ArrayList<>();
+            if (!gainers.isEmpty()) groups.add(rankGroup("🚀 급등 TOP", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!losers.isEmpty()) groups.add(rankGroup("🧊 급락 TOP", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!groups.isEmpty()) {
+                blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
+                blocks.add(paragraph(tone("급등·급락은 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다.", "muted")));
             }
         }
         return Optional.of(blocks);
@@ -144,6 +149,15 @@ public final class MarketReportBuilder {
             return Optional.of(new Change(today.close(), diff, rate, today.volume()));
         }
         return Optional.empty();
+    }
+
+    // basis까지 최근 SPARK_DAYS일 종가, 오래된 날짜부터
+    private static List<Double> spark(List<DailyBar> bars, LocalDate basis) {
+        if (bars == null) return List.of();
+        List<Double> closes = new ArrayList<>(bars.stream().filter(bar -> !bar.date().isAfter(basis)).limit(SPARK_DAYS)
+                .map(bar -> bar.close().doubleValue()).toList());
+        Collections.reverse(closes);
+        return closes;
     }
 
     private static String usSummary(Map<String, Change> changes) {
@@ -179,8 +193,8 @@ public final class MarketReportBuilder {
 
     private static String bigTechSummary(List<String> tech, Map<String, Change> changes) {
         long up = tech.stream().filter(symbol -> changes.get(symbol).rate().signum() > 0).count();
-        String best = tech.stream().max(Comparator.comparing(symbol -> changes.get(symbol).rate())).orElseThrow();
-        String worst = tech.stream().min(Comparator.comparing(symbol -> changes.get(symbol).rate())).orElseThrow();
+        String best = tech.getFirst();
+        String worst = tech.getLast();
         String text = "빅테크 " + tech.size() + "개 중 " + up + "개가 올랐습니다. 가장 강했던 종목은 " + US_BIG_TECH.get(best)
                 + "(" + signed(changes.get(best).rate()) + "%)";
         if (!best.equals(worst)) {
@@ -194,61 +208,49 @@ public final class MarketReportBuilder {
                 .filter(mover -> mover.volume() >= US_MIN_VOLUME).limit(5).toList();
     }
 
-    private static Map<String, Object> labeledList(String label, List<Mover> movers) {
-        List<Map<String, Object>> items = new ArrayList<>();
-        for (Mover mover : movers) {
-            items.add(listItem(text(mover.ticker(), "bold"), text(" " + usd(mover.price()) + " "),
-                    rate(mover.changePercent().setScale(2, RoundingMode.HALF_UP)),
-                    muted(" · 거래량 " + compact(mover.volume()))));
-        }
-        return Map.of("type", "bulletList", "content",
-                List.of(Map.of("type", "listItem", "content", List.of(paragraph(text(label, "bold")),
-                        Map.of("type", "bulletList", "content", items)))));
+    private static Map<String, Object> moverRow(Mover mover) {
+        return rankRow(mover.ticker(), usd(mover.price()), mover.changePercent(), "거래량 " + compact(mover.volume()));
     }
 
     // ───────────── 한국 ─────────────
 
+    // histories: 지수 이름별 최근 종가(추이 그래프용, 없으면 빈 목록)
     public static Optional<List<Map<String, Object>>> krSection(LocalDate basis, List<IndexQuote> indices,
-            List<StockQuote> stocks) {
+            List<StockQuote> stocks, Map<String, List<IndexClose>> histories) {
         Optional<IndexQuote> kospi = indices.stream().filter(index -> index.name().equals("코스피")).findFirst();
         if (kospi.isEmpty() || kospi.get().close() == null || kospi.get().rate() == null) return Optional.empty();
         Optional<IndexQuote> kosdaq = indices.stream().filter(index -> index.name().equals("코스닥"))
                 .filter(index -> index.close() != null && index.rate() != null).findFirst();
         List<StockQuote> rated = stocks.stream().filter(stock -> stock.rate() != null && stock.name() != null).toList();
 
+        double kospiRate = kospi.get().rate().doubleValue();
         List<Map<String, Object>> blocks = new ArrayList<>();
-        blocks.add(heading(2, "🌏 한국 증시 · " + dayLabel(basis) + " 마감"));
-        blocks.add(paragraph(text(krSummary(kospi.get(), kosdaq.orElse(null), rated))));
+        blocks.add(banner("kr", "한국 증시", dayLabel(basis) + " 마감", mood(kospiRate), moodLabel(kospiRate)));
+        blocks.add(callout(mood(kospiRate), paragraph(text(krSummary(kospi.get(), kosdaq.orElse(null), rated)))));
 
-        List<List<Map<String, Object>>> rows = new ArrayList<>();
-        rows.add(headerRow("지수", "종가", "전일 대비", "등락률", "거래대금"));
+        List<Map<String, Object>> stats = new ArrayList<>();
         for (IndexQuote index : kosdaq.isPresent() ? List.of(kospi.get(), kosdaq.get()) : List.of(kospi.get())) {
-            rows.add(List.of(cell(index.name()), cellRight(text(decimal2(index.close()))),
-                    cellRight(signedChange(index.change(), index.change() == null ? "-" : decimal2(index.change().abs()))),
-                    cellRight(rate(index.rate())), cellRight(text(won(index.tradeValue())))));
+            List<Double> spark = histories.getOrDefault(index.name(), List.of()).stream()
+                    .filter(close -> !close.date().isAfter(basis)).map(close -> close.close().doubleValue()).toList();
+            if (spark.size() > SPARK_DAYS) spark = spark.subList(spark.size() - SPARK_DAYS, spark.size());
+            stats.add(stat(index.name(), decimal2(index.close()),
+                    index.change() == null ? "-" : arrow(index.change(), decimal2(index.change().abs())), index.rate(),
+                    "거래대금 " + won(index.tradeValue()), spark));
         }
-        blocks.add(table(rows));
+        blocks.add(Map.of("type", "marketStats", "attrs", Map.of("items", stats)));
 
         if (!rated.isEmpty()) {
             long up = rated.stream().filter(stock -> stock.rate().signum() > 0).count();
             long down = rated.stream().filter(stock -> stock.rate().signum() < 0).count();
-            long flat = rated.size() - up - down;
-            blocks.add(paragraph(text("종목 등락 (코스피·코스닥 합산) ", "bold"), tone("▲ 오름 " + count(up), "up"),
-                    text(" · "), tone("▼ 내림 " + count(down), "down"), text(" · "), muted("보합 " + count(flat))));
+            blocks.add(Map.of("type", "marketBreadth", "attrs", Map.of("up", up, "flat", rated.size() - up - down,
+                    "down", down, "label", "코스피·코스닥 종목 등락")));
 
             List<StockQuote> caps = rated.stream().filter(stock -> stock.marketCap() != null)
                     .sorted(Comparator.comparing(StockQuote::marketCap).reversed()).limit(10).toList();
             if (!caps.isEmpty()) {
-                blocks.add(heading(3, "시가총액 상위 10"));
-                List<List<Map<String, Object>>> capRows = new ArrayList<>();
-                capRows.add(headerRow("순위", "종목", "종가", "등락률", "시가총액"));
-                for (int i = 0; i < caps.size(); i++) {
-                    StockQuote stock = caps.get(i);
-                    capRows.add(List.of(cellRight(text(String.valueOf(i + 1))), cell(stock.name() + marketTag(stock)),
-                            cellRight(text(price(stock.close()))), cellRight(rate(stock.rate())),
-                            cellRight(text(won(stock.marketCap())))));
-                }
-                blocks.add(table(capRows));
+                List<Map<String, Object>> tiles = caps.stream().map(stock -> tile(stock.name(),
+                        "시총 " + won(stock.marketCap()) + " · " + price(stock.close()), stock.rate())).toList();
+                blocks.add(Map.of("type", "marketHeatmap", "attrs", Map.of("title", "시가총액 TOP 10", "items", tiles)));
                 StockQuote mover = caps.stream().max(Comparator.comparing(stock -> stock.rate().abs())).orElseThrow();
                 blocks.add(paragraph(text("시가총액 상위 종목 중 가장 크게 움직인 종목은 " + mover.name() + "("
                         + signed(mover.rate()) + "%)입니다.")));
@@ -262,13 +264,16 @@ public final class MarketReportBuilder {
                     .sorted(Comparator.comparing(StockQuote::rate)).limit(5).toList();
             List<StockQuote> busiest = liquid.stream()
                     .sorted(Comparator.comparing(StockQuote::tradeValue).reversed()).limit(5).toList();
-            if (!gainers.isEmpty() || !losers.isEmpty() || !busiest.isEmpty()) {
-                blocks.add(heading(3, "많이 오르고 내린 종목 (거래대금 10억 원 이상)"));
-                List<Map<String, Object>> groups = new ArrayList<>();
-                if (!gainers.isEmpty()) groups.add(stockGroup("🔺 상승률 상위", gainers, false));
-                if (!losers.isEmpty()) groups.add(stockGroup("🔻 하락률 상위", losers, false));
-                if (!busiest.isEmpty()) groups.add(stockGroup("💰 거래대금 상위", busiest, true));
-                blocks.add(Map.of("type", "bulletList", "content", groups));
+            List<Map<String, Object>> groups = new ArrayList<>();
+            if (!gainers.isEmpty()) groups.add(rankGroup("🚀 상승률 TOP", "up", gainers.stream().map(stock ->
+                    rankRow(stock.name(), price(stock.close()), stock.rate(), marketName(stock))).toList()));
+            if (!losers.isEmpty()) groups.add(rankGroup("🧊 하락률 TOP", "down", losers.stream().map(stock ->
+                    rankRow(stock.name(), price(stock.close()), stock.rate(), marketName(stock))).toList()));
+            if (!busiest.isEmpty()) groups.add(rankGroup("💰 거래대금 TOP", "info", busiest.stream().map(stock ->
+                    rankRow(stock.name(), won(stock.tradeValue()), stock.rate(), marketName(stock))).toList()));
+            if (!groups.isEmpty()) {
+                blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
+                blocks.add(paragraph(tone("상승률·하락률·거래대금 순위는 거래대금 10억 원 이상 종목만 모았습니다.", "muted")));
             }
         }
         return Optional.of(blocks);
@@ -316,30 +321,32 @@ public final class MarketReportBuilder {
                 + close + "에 마감했습니다.";
     }
 
-    private static Map<String, Object> stockGroup(String label, List<StockQuote> stocks, boolean showValue) {
-        List<Map<String, Object>> items = new ArrayList<>();
-        for (StockQuote stock : stocks) {
-            // 본문 검사는 빈 글자 노드를 거절하므로, 코스피 종목(시장 표시 없음)은 그 조각을 넣지 않음
-            List<Map<String, Object>> parts = new ArrayList<>(List.of(text(stock.name(), "bold")));
-            if (!marketTag(stock).isEmpty()) parts.add(muted(marketTag(stock)));
-            parts.add(text(" " + price(stock.close()) + " "));
-            parts.add(rate(stock.rate()));
-            if (showValue) parts.add(muted(" · " + won(stock.tradeValue())));
-            items.add(Map.of("type", "listItem", "content", List.of(Map.of("type", "paragraph", "content", parts))));
-        }
-        return Map.of("type", "listItem", "content",
-                List.of(paragraph(text(label, "bold")), Map.of("type", "bulletList", "content", items)));
+    private static String marketName(StockQuote stock) {
+        return "KOSDAQ".equals(stock.market()) ? "코스닥" : "코스피";
     }
 
-    private static String marketTag(StockQuote stock) {
-        return "KOSDAQ".equals(stock.market()) ? " (코스닥)" : "";
+    // ───────────── 분위기 ─────────────
+
+    private static String mood(double rate) {
+        return rate >= 0.3 ? "up" : rate <= -0.3 ? "down" : "flat";
+    }
+
+    private static String moodLabel(double rate) {
+        if (rate >= 1.5) return "강한 상승";
+        if (rate >= 0.3) return "상승";
+        if (rate <= -1.5) return "강한 하락";
+        if (rate <= -0.3) return "하락";
+        return "보합";
     }
 
     // ───────────── 글자 모양 ─────────────
 
     static String dayLabel(LocalDate date) {
-        return date.getMonthValue() + "월 " + date.getDayOfMonth() + "일("
-                + date.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.KOREAN) + ")";
+        return date.getMonthValue() + "월 " + date.getDayOfMonth() + "일(" + weekday(date) + ")";
+    }
+
+    private static String weekday(LocalDate date) {
+        return date.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.KOREAN);
     }
 
     static String signed(BigDecimal rate) {
@@ -347,15 +354,9 @@ public final class MarketReportBuilder {
         return (value.signum() > 0 ? "+" : "") + value.toPlainString();
     }
 
-    private static Map<String, Object> rate(BigDecimal rate) {
-        if (rate == null) return text("-");
-        String label = signed(rate) + "%";
-        return rate.signum() > 0 ? tone(label, "up") : rate.signum() < 0 ? tone(label, "down") : text(label);
-    }
-
-    private static Map<String, Object> signedChange(BigDecimal change, String absText) {
-        if (change == null || change.signum() == 0) return text("-");
-        return change.signum() > 0 ? tone("▲" + absText, "up") : tone("▼" + absText, "down");
+    private static String arrow(BigDecimal change, String absText) {
+        if (change == null || change.signum() == 0) return "-";
+        return (change.signum() > 0 ? "▲" : "▼") + absText;
     }
 
     static String usd(BigDecimal value) {
@@ -368,10 +369,6 @@ public final class MarketReportBuilder {
 
     static String price(BigDecimal value) {
         return new DecimalFormat("#,##0").format(value) + "원";
-    }
-
-    private static String count(long value) {
-        return new DecimalFormat("#,##0").format(value) + "개";
     }
 
     // 12345678 → 12.3M
@@ -398,10 +395,8 @@ public final class MarketReportBuilder {
 
     // ───────────── 편집기 문서 노드 ─────────────
 
-    static Map<String, Object> text(String value, String... marks) {
-        if (marks.length == 0) return Map.of("type", "text", "text", value);
-        return Map.of("type", "text", "text", value, "marks",
-                List.of(marks).stream().map(mark -> Map.of("type", mark)).toList());
+    static Map<String, Object> text(String value) {
+        return Map.of("type", "text", "text", value);
     }
 
     static Map<String, Object> tone(String value, String tone) {
@@ -409,53 +404,56 @@ public final class MarketReportBuilder {
                 List.of(Map.of("type", "tone", "attrs", Map.of("tone", tone))));
     }
 
-    static Map<String, Object> muted(String value) {
-        return tone(value, "muted");
-    }
-
     @SafeVarargs
     static Map<String, Object> paragraph(Map<String, Object>... inline) {
         return Map.of("type", "paragraph", "content", List.of(inline));
     }
 
-    static Map<String, Object> heading(int level, String value) {
-        return Map.of("type", "heading", "attrs", Map.of("level", level), "content", List.of(text(value)));
-    }
-
     @SafeVarargs
-    private static Map<String, Object> listItem(Map<String, Object>... inline) {
-        return Map.of("type", "listItem", "content", List.of(paragraph(inline)));
+    private static Map<String, Object> callout(String tone, Map<String, Object>... blocks) {
+        return Map.of("type", "callout", "attrs", Map.of("tone", tone), "content", List.of(blocks));
     }
 
-    private static Map<String, Object> table(List<List<Map<String, Object>>> rows) {
-        return Map.of("type", "table", "content",
-                rows.stream().map(cells -> Map.of("type", "tableRow", "content", cells)).toList());
+    // mood·moodLabel이 null이면 배지 없이(준비 중·데이터 없음)
+    private static Map<String, Object> banner(String market, String title, String date, String mood, String moodLabel) {
+        Map<String, Object> attrs = new LinkedHashMap<>();
+        attrs.put("market", market);
+        attrs.put("title", title);
+        attrs.put("date", date);
+        if (mood != null) attrs.put("mood", mood);
+        if (moodLabel != null) attrs.put("moodLabel", moodLabel);
+        return Map.of("type", "marketBanner", "attrs", attrs);
     }
 
-    private static List<Map<String, Object>> headerRow(String... labels) {
-        List<Map<String, Object>> cells = new ArrayList<>();
-        for (int i = 0; i < labels.length; i++) {
-            Map<String, Object> cell = new LinkedHashMap<>();
-            cell.put("type", "tableHeader");
-            if (i > 0) cell.put("attrs", Map.of("align", "right"));
-            cell.put("content", List.of(paragraph(text(labels[i]))));
-            cells.add(cell);
-        }
-        return cells;
+    private static Map<String, Object> stat(String label, String value, String change, BigDecimal rate, String sub,
+            List<Double> spark) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("label", label);
+        item.put("value", value);
+        item.put("change", change);
+        if (rate != null) item.put("rate", rate.doubleValue());
+        item.put("sub", sub);
+        if (spark.size() >= 2) item.put("spark", spark);
+        return item;
     }
 
-    private static Map<String, Object> cell(String value) {
-        return Map.of("type", "tableCell", "content", List.of(paragraph(text(value))));
+    private static Map<String, Object> tile(String label, String sub, BigDecimal rate) {
+        return Map.of("label", label, "sub", sub, "rate", rate.doubleValue());
     }
 
-    private static Map<String, Object> cellRight(Map<String, Object> inline) {
-        return Map.of("type", "tableCell", "attrs", Map.of("align", "right"), "content", List.of(paragraph(inline)));
+    private static Map<String, Object> rankGroup(String title, String tone, List<Map<String, Object>> items) {
+        return Map.of("title", title, "tone", tone, "items", items);
+    }
+
+    private static Map<String, Object> rankRow(String name, String value, BigDecimal rate, String sub) {
+        return Map.of("name", name, "value", value, "rate", rate.setScale(2, RoundingMode.HALF_UP).doubleValue(),
+                "sub", sub);
     }
 
     private static Map<String, String> ordered(String... pairs) {
         Map<String, String> map = new LinkedHashMap<>();
         for (int i = 0; i < pairs.length; i += 2) map.put(pairs[i], pairs[i + 1]);
-        return java.util.Collections.unmodifiableMap(map);
+        return Collections.unmodifiableMap(map);
     }
 
     private static List<String> concat(Map<String, String> first, Map<String, String> second) {

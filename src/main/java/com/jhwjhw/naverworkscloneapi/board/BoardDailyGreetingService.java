@@ -68,7 +68,7 @@ public class BoardDailyGreetingService {
             return freeBoardId().orElseThrow();
         });
         BoardResponse.PostDetail post = boardService.create(membershipId, new BoardRequest.PostCreate(boardId,
-                titleOf(date), contentJson(), false, false, List.of()));
+                titleOf(date), contentJson(date), false, false, List.of()));
         greetingRepository.saveAndFlush(new BoardDailyGreeting(date, post.id()));
         return true;
     }
@@ -78,7 +78,7 @@ public class BoardDailyGreetingService {
     }
 
     // 편집기 문서 형식. 인사 문구 + (증시 분석이 켜져 있으면) "불러오는 중" 안내 — 분석은 BoardMarketReportService가 곧 채움.
-    private String contentJson() {
-        return reportService.documentJson(CONTENT_TEXT, null, null);
+    private String contentJson(LocalDate date) {
+        return reportService.documentJson(date, CONTENT_TEXT, null, null);
     }
 }

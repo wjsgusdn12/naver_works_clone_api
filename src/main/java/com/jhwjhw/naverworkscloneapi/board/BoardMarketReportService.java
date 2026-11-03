@@ -108,8 +108,8 @@ public class BoardMarketReportService {
     }
 
     // 인사 글 본문(분석 부분이 없으면 "준비 중" 안내). 처음 올릴 때와 분석을 채울 때 함께 씀.
-    String documentJson(String greeting, String usSection, String krSection) {
-        return objectMapper.writeValueAsString(MarketReportBuilder.document(greeting, nodes(usSection),
+    String documentJson(LocalDate date, String greeting, String usSection, String krSection) {
+        return objectMapper.writeValueAsString(MarketReportBuilder.document(date, greeting, nodes(usSection),
                 nodes(krSection), usEnabled(), krEnabled()));
     }
 
@@ -204,7 +204,7 @@ public class BoardMarketReportService {
         if (usSection != null) greeting.finishUs(usSection, at);
         if (krSection != null) greeting.finishKr(krSection, at);
         postRepository.findById(greeting.getPostId()).filter(post -> !post.isDeleted()).ifPresent(post -> {
-            BoardContent.Sanitized body = content.sanitize(documentJson(BoardDailyGreetingService.CONTENT_TEXT,
+            BoardContent.Sanitized body = content.sanitize(documentJson(date, BoardDailyGreetingService.CONTENT_TEXT,
                     greeting.getUsSection(), greeting.getKrSection()));
             post.refreshContentBySystem(body.json(), body.text());
         });
@@ -272,7 +272,10 @@ public class BoardMarketReportService {
     // ───────────── 한국 ─────────────
 
     private Optional<List<Map<String, Object>>> buildKr(LocalDate date, ZonedDateTime now) throws IOException {
-        Optional<LocalDate> latest = korea.latestTradingDay(date);
+        // 코스피 추이로 마지막 거래일도 함께 알아냄(호출 한 번 아낌)
+        List<KoreaMarketClient.IndexClose> kospiHistory = korea.history("코스피", date);
+        Optional<LocalDate> latest = kospiHistory.stream().map(KoreaMarketClient.IndexClose::date)
+                .max(LocalDate::compareTo);
         if (latest.isEmpty()) return Optional.empty();
         LocalDate expected = previousWeekday(date);
         if (!latest.get().equals(expected)) {
@@ -282,7 +285,15 @@ public class BoardMarketReportService {
         }
         List<KoreaMarketClient.IndexQuote> indices = korea.indices(latest.get());
         if (indices.isEmpty()) return Optional.empty();
-        return MarketReportBuilder.krSection(latest.get(), indices, korea.stocks(latest.get()));
+        Map<String, List<KoreaMarketClient.IndexClose>> histories = new HashMap<>();
+        histories.put("코스피", kospiHistory);
+        try {
+            histories.put("코스닥", korea.history("코스닥", date));
+        } catch (IOException exception) {
+            // 추이 그래프만 빠짐
+            log.warn("Market report KR kosdaq history skipped. reason={}", exception.getMessage());
+        }
+        return MarketReportBuilder.krSection(latest.get(), indices, korea.stocks(latest.get()), histories);
     }
 
     // ───────────── 도움 ─────────────
