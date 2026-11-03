@@ -85,7 +85,8 @@ public class BoardContent {
         switch (type) {
             case "doc", "paragraph", "bulletList", "listItem", "blockquote", "table", "tableRow" -> {
             }
-            case "marketHero", "marketBanner", "marketStats", "marketBreadth", "marketHeatmap", "marketRanks" -> {
+            case "marketHero", "marketBanner", "marketStats", "marketBreadth", "marketHeatmap", "marketRanks",
+                    "marketNews" -> {
                 // 증시 보고 꾸밈 블록: 속성만 있고 자식은 없음
                 result.put("attrs", MarketBlocks.attrs(type, attrs(source), state.text::append));
                 return result;

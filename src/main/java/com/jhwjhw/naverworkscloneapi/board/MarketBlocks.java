@@ -13,7 +13,7 @@ import java.util.function.Consumer;
 final class MarketBlocks {
     // 자식 노드 없이 속성만 가진 블록. callout만 안에 문단을 가짐.
     static final Set<String> LEAF_TYPES = Set.of("marketHero", "marketBanner", "marketStats", "marketBreadth",
-            "marketHeatmap", "marketRanks");
+            "marketHeatmap", "marketRanks", "marketNews");
     static final String CALLOUT = "callout";
 
     private static final Set<String> MARKETS = Set.of("us", "kr");
@@ -77,6 +77,23 @@ final class MarketBlocks {
                     put(clean, "label", item.get("label"), text);
                     put(clean, "sub", item.get("sub"), text);
                     putNumber(clean, "rate", item.get("rate"), text);
+                    return clean;
+                }));
+            }
+            case "marketNews" -> {
+                put(result, "title", source.get("title"), text);
+                result.put("items", list(source.get("items"), 12, item -> {
+                    Map<String, Object> clean = new LinkedHashMap<>();
+                    put(clean, "category", item.get("category"), text);
+                    put(clean, "title", item.get("title"), text);
+                    put(clean, "source", item.get("source"), text);
+                    put(clean, "time", item.get("time"), text);
+                    // 원문 링크는 http·https만(javascript: 등은 버림)
+                    if (item.get("href") instanceof String href && href.length() <= 2048
+                            && (href.startsWith("https://") || href.startsWith("http://"))
+                            && BoardContent.safeHref(href)) {
+                        clean.put("href", href);
+                    }
                     return clean;
                 }));
             }
