@@ -16,16 +16,19 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class BoardDailyGreetingScheduler {
     private final BoardDailyGreetingService greetingService;
+    private final BoardMarketReportService reportService;
     private final Clock clock;
     private final ZoneId zone;
     private final LocalTime postAt;
     private final boolean enabled;
 
     public BoardDailyGreetingScheduler(BoardDailyGreetingService greetingService,
+            BoardMarketReportService reportService,
             @Value("${app.monitoring.zone:Asia/Seoul}") String zone,
             @Value("${app.board.daily-greeting.time:09:00}") String postAt,
             @Value("${app.board.daily-greeting.enabled:true}") boolean enabled) {
         this.greetingService = greetingService;
+        this.reportService = reportService;
         this.clock = Clock.systemUTC();
         this.zone = ZoneId.of(zone);
         this.postAt = LocalTime.parse(postAt);
@@ -36,7 +39,12 @@ public class BoardDailyGreetingScheduler {
     public void postToday() {
         if (!enabled) return;
         ZonedDateTime now = ZonedDateTime.now(clock.withZone(zone));
-        if (now.toLocalTime().isBefore(postAt)) return;
+        if (!now.toLocalTime().isBefore(postAt)) postIfMissing(now);
+        // 글에 증시 분석 채우기(오늘 글·아직 안 채운 지난 글). 별도 스레드에서 돌아 바로 돌아옴.
+        reportService.triggerAsync();
+    }
+
+    private void postIfMissing(ZonedDateTime now) {
         try {
             if (greetingService.postIfMissing(now.toLocalDate())) {
                 log.info("Daily greeting posted. date={}", now.toLocalDate());

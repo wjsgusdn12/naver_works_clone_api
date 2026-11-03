@@ -24,6 +24,9 @@ app:
     # 매일 인사 글 예약 작업은 테스트 중 끼어들지 않게 끔(올리는 동작 자체는 BoardDailyGreetingTests에서 직접 호출).
     daily-greeting:
       enabled: false
+  market:
+    # 테스트에서는 실제 시세 API를 부르지 않음(분석 규칙은 가짜 응답으로 BoardMarketReportTests에서 검증)
+    enabled: false
   cors:
     allowed-origin: http://localhost:3000
   auth:

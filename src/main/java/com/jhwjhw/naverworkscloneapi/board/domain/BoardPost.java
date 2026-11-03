@@ -112,6 +112,13 @@ public class BoardPost {
         this.activityAt = this.updatedAt;
     }
 
+    // 사람이 고친 것이 아니라 시스템이 본문만 새로 채움(매일 인사 글의 증시 분석 보강).
+    // 그래서 "(수정됨)"·업데이트 순 정렬 시각은 바꾸지 않음.
+    public void refreshContentBySystem(String contentJson, String contentText) {
+        this.contentJson = contentJson;
+        this.contentText = contentText;
+    }
+
     public void changeCommentOptions(boolean allowComment, boolean commentNotify) {
         this.allowComment = allowComment;
         this.commentNotify = commentNotify;

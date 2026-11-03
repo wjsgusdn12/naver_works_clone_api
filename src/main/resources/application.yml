@@ -41,6 +41,16 @@ app:
     instance-id: ${APP_INSTANCE_ID:}
     # 대시보드의 "이번 시간·오늘·이번 주"를 자르는 기준 시간대.
     zone: ${APP_TIMEZONE:Asia/Seoul}
+  market:
+    # 매일 인사 글에 붙는 증시 분석. 키가 비어 있는 시장은 건너뜀(둘 다 비면 예전처럼 인사 문구만).
+    # 미국 키는 하루 25번 제한이라, 로컬과 배포 서버가 같은 키를 함께 쓰면 모자랄 수 있음(한쪽은 enabled=false 권장).
+    enabled: ${MARKET_REPORT_ENABLED:true}
+    # 공공데이터포털 "일반 인증키(Decoding)" — 금융위원회_지수시세정보·주식시세정보 활용신청 필요
+    data-go-kr-key: ${DATA_GO_KR_SERVICE_KEY:}
+    # Alpha Vantage 무료 키
+    alpha-vantage-key: ${ALPHA_VANTAGE_API_KEY:}
+    # 한국 증시 분석을 채우기 시작하는 시각(공공데이터는 다음 영업일 오후 1시 이후 올라옴)
+    korea-time: "14:00"
   storage:
     # 첨부 파일을 저장할 서버 디스크 폴더. 배포 때는 Docker 볼륨 경로로 덮어씀.
     root: ${FILE_STORAGE_ROOT:./uploads}

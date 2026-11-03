@@ -11,13 +11,11 @@ import com.jhwjhw.naverworkscloneapi.identity.repository.UserAccountRepository;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.ObjectMapper;
 
 // 매일 자유게시판에 관리자 계정으로 인사 글을 올림(BoardDailyGreetingScheduler가 부름).
 // 글과 날짜 기록을 한 트랜잭션에 저장하므로, 다른 서버가 같은 날 먼저 올렸으면 날짜 기본 키 충돌로 이쪽 글까지 함께 취소됨.
@@ -32,20 +30,20 @@ public class BoardDailyGreetingService {
     private final BoardDailyGreetingRepository greetingRepository;
     private final UserAccountRepository accountRepository;
     private final MembershipRepository membershipRepository;
-    private final ObjectMapper objectMapper;
+    private final BoardMarketReportService reportService;
     // 글쓴이 계정 아이디. 기본은 처음 만든 관리자 계정.
     private final String loginId;
 
     public BoardDailyGreetingService(BoardService boardService, BoardRepository boardRepository,
             BoardDailyGreetingRepository greetingRepository, UserAccountRepository accountRepository,
-            MembershipRepository membershipRepository, ObjectMapper objectMapper,
+            MembershipRepository membershipRepository, BoardMarketReportService reportService,
             @Value("${app.board.daily-greeting.login-id:admin@naverworks.local}") String loginId) {
         this.boardService = boardService;
         this.boardRepository = boardRepository;
         this.greetingRepository = greetingRepository;
         this.accountRepository = accountRepository;
         this.membershipRepository = membershipRepository;
-        this.objectMapper = objectMapper;
+        this.reportService = reportService;
         this.loginId = loginId;
     }
 
@@ -79,9 +77,8 @@ public class BoardDailyGreetingService {
         return boardRepository.findByTypes(List.of(BoardType.FREE)).stream().findFirst().map(Board::getId);
     }
 
-    // 편집기 문서 형식(문단 하나)
+    // 편집기 문서 형식. 인사 문구 + (증시 분석이 켜져 있으면) "불러오는 중" 안내 — 분석은 BoardMarketReportService가 곧 채움.
     private String contentJson() {
-        return objectMapper.writeValueAsString(Map.of("type", "doc", "content", List.of(Map.of("type", "paragraph",
-                "content", List.of(Map.of("type", "text", "text", CONTENT_TEXT))))));
+        return reportService.documentJson(CONTENT_TEXT, null, null);
     }
 }
