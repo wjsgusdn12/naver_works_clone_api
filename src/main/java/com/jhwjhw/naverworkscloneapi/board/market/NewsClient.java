@@ -75,7 +75,54 @@ public class NewsClient {
         List<Article> economy = fetch(MK_HEADLINE, "경제", "매일경제");
         pick(result, seen, economy.isEmpty() ? fetch(GOOGLE_BUSINESS, "경제", null) : economy, since, 4, false);
         pick(result, seen, fetch(YNA_ECONOMY, "시장", "연합뉴스"), since, 2, true);
-        return result;
+        return result.stream().map(this::withShareDescription).toList();
+    }
+
+    // 기사 페이지에서 읽어도 되는 언론사(공유용 설명만 읽음, 본문은 읽지 않음)
+    private static final Set<String> SHARE_HOSTS = Set.of("news.sbs.co.kr", "www.mk.co.kr", "www.yna.co.kr");
+    private static final java.util.regex.Pattern OG_DESCRIPTION = java.util.regex.Pattern.compile(
+            "<meta[^>]+property=[\"']og:description[\"'][^>]+content=[\"']([^\"']*)[\"']", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final int MERGED_MAX = 320;
+
+    // RSS 요약 + 기사 페이지의 공유용 설명(og:description, 언론사가 SNS 미리보기용으로 내놓은 글)을 겹치지 않게 합쳐
+    // 2~3줄로. 페이지를 못 읽으면 RSS 요약 그대로.
+    private Article withShareDescription(Article article) {
+        String share = null;
+        try {
+            URI uri = URI.create(article.link());
+            if (SHARE_HOSTS.contains(uri.getHost()) && "https".equals(uri.getScheme())) {
+                java.util.regex.Matcher matcher = OG_DESCRIPTION.matcher(http.get(uri));
+                if (matcher.find()) share = summarize(matcher.group(1));
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // 공유용 설명 없이
+        }
+        String merged = merge(article.summary(), share);
+        return new Article(article.category(), article.title(), article.source(), article.link(), article.publishedAt(),
+                merged, article.related());
+    }
+
+    // 두 요약을 문장 단위로 합침(같은 문장·서로 포함되는 문장은 한 번만). 최대 320자.
+    static String merge(String first, String second) {
+        if (first == null || first.isBlank()) return second;
+        if (second == null || second.isBlank()) return first;
+        String a = first.replaceAll("…$", "").strip();
+        String b = second.replaceAll("…$", "").strip();
+        String plainA = a.replaceAll("\\s", "");
+        String plainB = b.replaceAll("\\s", "");
+        if (plainA.contains(plainB)) return first;
+        if (plainB.contains(plainA)) return second;
+        // 공유용 설명이 RSS 요약의 앞부분과 같게 시작하면(같은 문장의 긴 판) 긴 쪽만
+        String head = plainA.substring(0, Math.min(20, plainA.length()));
+        if (plainB.startsWith(head)) return b.length() >= a.length() ? second : first;
+        // RSS 요약(본문 첫머리)이 먼저. 잘려 끝난 RSS 요약은 마지막 온전한 문장까지만 남기고 이어 붙임.
+        if (first.strip().endsWith("…")) {
+            int end = Math.max(Math.max(a.lastIndexOf("다."), a.lastIndexOf("요.")), a.lastIndexOf("음."));
+            a = end > 0 ? a.substring(0, end + 2) : "";
+        }
+        if (a.isBlank()) return second;
+        String joined = a + " " + b;
+        return joined.length() <= MERGED_MAX ? joined : joined.substring(0, MERGED_MAX).strip() + "…";
     }
 
     private static void pick(List<Article> result, Set<String> seen, List<Article> articles, ZonedDateTime since,
