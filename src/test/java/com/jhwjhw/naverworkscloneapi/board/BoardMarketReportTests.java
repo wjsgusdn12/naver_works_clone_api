@@ -136,7 +136,8 @@ class BoardMarketReportTests {
         post = posts.findById(afternoon.getPostId()).orElseThrow();
         assertThat(post.getContentText()).contains("한국 증시 11월 2일(월) 마감").contains("코스피는 1.20% 올라 2,612.45")
                 .contains("시가총액 상위 10").contains("가상전자").contains("거래대금 상위").contains("오름 2 보합 0 내림 1")
-                .doesNotContain("한국 증시 분석은 오후 2시 이후").contains("미국 증시 11월 2일(월) 마감");
+                .doesNotContain("한국 증시 분석은 오후 2시 이후").contains("미국 증시 11월 2일(월) 마감")
+                .contains("오후 2시쯤 자동으로 추가됩니다");
         assertThat(post.getContentJson()).contains("\"type\":\"marketBreadth\"");
         assertThat(post.getContentText()).contains("한국 시장 이야기").contains("시장 체감").contains("돈의 흐름")
                 .contains("1위 가상전자").contains("상한가 1개 (가상소형 등)").contains("다음 거래일 체크포인트")

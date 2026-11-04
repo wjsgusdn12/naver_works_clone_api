@@ -41,6 +41,9 @@ public final class MarketReportBuilder {
         return sectionJson != null && sectionJson.contains(FORMAT_MARK);
     }
 
+    static final String KR_DELAY_NOTE = "한국 증시 시세(금융위원회 공공데이터)는 다음 영업일 오후 1시 이후에 제공되어, "
+            + "한국 증시 부분은 아침 글에 이어 오후 2시쯤 자동으로 추가됩니다.";
+
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal EOK = new BigDecimal("100000000");
     // 추이 그래프에 넣는 최근 거래일 수
@@ -74,7 +77,7 @@ public final class MarketReportBuilder {
         if (kr != null) blocks.addAll(kr);
         else if (krEnabled) {
             blocks.addAll(pending("kr", "한국 증시", "한국 증시 분석은 오후 2시 이후에 추가됩니다. "
-                    + "(공공데이터 시세가 다음 영업일 오후 1시 이후에 올라옵니다)"));
+                    + "한국 시세(금융위원회 공공데이터)가 다음 영업일 오후 1시 이후에 제공되어 미국 증시보다 늦게 붙습니다."));
         }
         if (report) {
             blocks.add(callout("muted", paragraph(text("※ 시세 숫자로 자동 작성한 요약이며 투자 권유가 아닙니다. "
@@ -462,6 +465,8 @@ public final class MarketReportBuilder {
         }
         blocks.add(heading(3, "다음 거래일 체크포인트"));
         blocks.add(checklist(krCheckpoints(kospi.get(), rated, histories, basis)));
+        // 글은 아침에 올라가고 한국 부분만 오후에 붙는 이유(무료 공공데이터의 제공 시각)를 남김
+        blocks.add(paragraph(tone(KR_DELAY_NOTE, "muted")));
         return Optional.of(blocks);
     }
 
