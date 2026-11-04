@@ -5,7 +5,7 @@ import java.util.List;
 
 // 홈 화면 API 대시보드 응답. 화면이 고른 기간(range) 하나만 담음. 기간은 지금부터 거꾸로 밀려가는 창.
 // mode: SHARED(서버 목록 통합, Redis) / LOCAL(서버 목록은 이 서버만, 로컬 개발). 요청 집계는 항상 DB 기준.
-// trend: HOUR 최근 60분 1분×60, DAY 최근 24시간 5분×288, WEEK 최근 7일 1시간×168, MONTH 최근 30일 1시간×720
+// trend: HOUR 최근 60분 1분×60, DAY 최근 24시간 5분×288, WEEK 최근 7일 1시간×168, MONTH 최근 30일 3시간×240
 // previousSummary: 직전 같은 길이 기간(지금 창을 기간 길이만큼 앞으로 민 구간)의 합계. 숫자 카드 증감 표시용.
 // domains: 요청 수를 나눈 영역 이름(메시지·주소록…·기타). 추이 점의 domainRequests가 이 순서로 담김.
 // pool: DB 연결 풀. 지금 값은 이 응답을 만든 서버, trend는 위 trend와 같은 칸별 기록(서버 중 가장 높은 값).
@@ -28,7 +28,7 @@ public record ApiDashboardResponse(Instant generatedAt, String zone, String mode
             List<Long> latency, boolean estimated, long clientErrors, long serverErrors, List<Long> domainRequests) {
     }
 
-    // 기간별 API 순위. bins는 작은 추이선 칸의 시작 시각(이번 시간 1분×60, 오늘 5분×288, 이번 주 1일×7, 이번 달 1시간).
+    // 기간별 API 순위. bins는 작은 추이선 칸의 시작 시각(최근 60분 1분×60, 24시간 5분×288, 7일 1일×7, 30일 3시간×240).
     public record Ranking(List<Instant> bins, List<EndpointStat> top, List<EndpointStat> slow) {
     }
 

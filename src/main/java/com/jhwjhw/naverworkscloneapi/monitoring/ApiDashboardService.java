@@ -23,7 +23,7 @@ import org.springframework.stereotype.Service;
 // 기간은 모두 "지금부터 거꾸로" 밀려가는 창(정각·자정이 지나도 그래프가 비지 않음). 맨 오른쪽 점이 지금 칸.
 // - 최근 60분: 1분 점 60개
 // - 최근 24시간: 5분 점 288개
-// - 최근 7일: 1시간 점 168개 / 최근 30일: 1시간 점 720개(1시간 요약뿐이라 정시 단위로 밀려감)
+// - 최근 7일: 1시간 점 168개 / 최근 30일: 3시간 점 240개(1시간 요약을 3시간씩 묶음, 서울 0·3·6…시 시작)
 // 숫자 카드·순위 합계는 그래프 점과 같은 칸을 더한 값(서로 항상 맞아떨어짐).
 // 잘게 쪼갠 기록이 없는 구간(예: 기능 추가 전)은 큰 단위 기록(5분·1시간 합계)을
 // 그 구간의 칸마다 고르게 나눠 채우고 추정값(estimated)으로 표시.
@@ -36,6 +36,9 @@ public class ApiDashboardService {
     static final int DAY_BUCKETS = 24 * (int) BUCKETS_PER_HOUR;
     static final int WEEK_HOURS = 24 * 7;
     static final int MONTH_HOURS = 24 * 30;
+    // 최근 30일은 1시간 점 720개가 무거워 3시간씩 묶음(점 240개)
+    static final int MONTH_STEP_HOURS = 3;
+    static final int MONTH_POINTS = MONTH_HOURS / MONTH_STEP_HOURS;
     static final int HOUR_MINUTES = 60;
     private static final int DAY_HOURS = 24;
     private static final int MINUTES_PER_BUCKET = (int) (ApiMetricsRecorder.BUCKET_SECONDS / 60);
@@ -79,9 +82,9 @@ public class ApiDashboardService {
         Period period = switch (range) {
             case HOUR -> hourPeriod(now);
             case DAY -> dayPeriod(now);
-            // 순위 옆 작은 추이선: 최근 7일은 24시간씩 7칸, 최근 30일은 1시간 칸 그대로
-            case WEEK -> hourlyPeriod(now, WEEK_HOURS, DAY_HOURS);
-            case MONTH -> hourlyPeriod(now, MONTH_HOURS, 1);
+            // 순위 옆 작은 추이선: 최근 7일은 24시간씩 7칸, 최근 30일은 그래프와 같은 3시간 칸
+            case WEEK -> hourlyPeriod(now, WEEK_HOURS, 1, DAY_HOURS);
+            case MONTH -> hourlyPeriod(now, MONTH_POINTS, MONTH_STEP_HOURS, MONTH_STEP_HOURS);
         };
 
         List<ApiDashboardResponse.Server> servers = store.servers(now).stream()
@@ -201,14 +204,17 @@ public class ApiDashboardService {
         return new Period(fine.total(), fine.points(), ranking);
     }
 
-    // 최근 7일·30일: 지금 시간까지 1시간 요약 hours칸(정시 단위로 밀려감).
+    // 최근 7일·30일: 지금 시간까지 stepHours시간 칸 points개(1시간 요약을 묶음).
+    // 칸은 서울 시각 기준 stepHours의 배수 시(0·3·6…시)에 시작하고, 맨 오른쪽 칸은 지금 시간까지(진행 중).
     // 순위 옆 작은 추이선은 binHours시간씩 묶은 칸.
-    private Period hourlyPeriod(Instant now, int hours, int binHours) {
+    private Period hourlyPeriod(Instant now, int points, int stepHours, int binHours) {
         Instant lastHour = ApiMetricsRecorder.hourOf(now);
-        Instant from = lastHour.minus(Duration.ofHours(hours - 1L));
+        int hourOfDay = lastHour.atZone(zone).getHour();
+        Instant lastStart = lastHour.minus(Duration.ofHours(hourOfDay % stepHours));
+        Instant from = lastStart.minus(Duration.ofHours((long) (points - 1) * stepHours));
         Instant to = lastHour.plus(Duration.ofHours(1));
-        HourlyTrend hourly = hourlyTrend(from, to);
-        int binCount = hours / binHours;
+        HourlyTrend hourly = hourlyTrend(from, to, points, stepHours);
+        int binCount = points * stepHours / binHours;
         List<Instant> bins = IntStream.range(0, binCount)
                 .mapToObj(bin -> from.plus(Duration.ofHours((long) bin * binHours))).toList();
         ApiDashboardResponse.Ranking ranking = ranking(hourlyRepository.readEndpointTotals(from, to), bins,
@@ -219,17 +225,25 @@ public class ApiDashboardService {
     private record HourlyTrend(MetricsBucket total, List<ApiDashboardResponse.TrendPoint> points) {
     }
 
-    // [from, to) 기간을 1시간 요약 한 칸씩 점으로. 영역별 나눔은 API별 시간 기록으로 셈.
-    private HourlyTrend hourlyTrend(Instant from, Instant to) {
+    // [from, to) 기간을 stepHours시간씩 묶어 count개 점으로(1시간 요약을 더함). 영역별 나눔은 API별 시간 기록으로 셈.
+    private HourlyTrend hourlyTrend(Instant from, Instant to, int count, int stepHours) {
         Map<Instant, MetricsBucket> hours = hourlyRepository.readTotals(from);
         Map<Instant, Map<String, Long>> endpointCounts = hourlyRepository.readEndpointCountsByHour(from, to);
         MetricsBucket total = new MetricsBucket();
         List<ApiDashboardResponse.TrendPoint> points = new ArrayList<>();
-        for (Instant hour = from; hour.isBefore(to); hour = hour.plus(Duration.ofHours(1))) {
-            MetricsBucket data = hours.getOrDefault(hour, new MetricsBucket());
+        for (int index = 0; index < count; index++) {
+            Instant start = from.plus(Duration.ofHours((long) index * stepHours));
+            MetricsBucket data = new MetricsBucket();
+            Map<String, Long> counts = new HashMap<>();
+            for (int offset = 0; offset < stepHours; offset++) {
+                Instant hour = start.plus(Duration.ofHours(offset));
+                if (!hour.isBefore(to)) break;
+                MetricsBucket hourData = hours.get(hour);
+                if (hourData != null) data.add(hourData);
+                endpointCounts.getOrDefault(hour, Map.of()).forEach((endpoint, value) -> counts.merge(endpoint, value, Long::sum));
+            }
             total.add(data);
-            points.add(point(hour, data, 60,
-                    ApiDomain.split(data.getCount(), endpointCounts.getOrDefault(hour, Map.of()))));
+            points.add(point(start, data, stepHours * 60, ApiDomain.split(data.getCount(), counts)));
         }
         return new HourlyTrend(total, points);
     }

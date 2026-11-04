@@ -143,10 +143,14 @@ class ApiDashboardTests {
             assertThat(stat.trendRequests().stream().mapToLong(Long::longValue).sum()).isEqualTo(stat.requests());
         });
 
-        // 최근 30일: 지금 시간까지 1시간 칸 720개, 점들을 더하면 30일 합계.
+        // 최근 30일: 지금 시간까지 3시간 칸 240개(서울 0·3·6…시 시작), 점들을 더하면 30일 합계.
         ApiDashboardResponse month = dashboardService.dashboard(ApiDashboardService.Range.MONTH);
-        assertThat(month.trend()).hasSize(ApiDashboardService.MONTH_HOURS);
-        assertThat(month.trend().getLast().startAt()).isEqualTo(ApiMetricsRecorder.hourOf(month.generatedAt()));
+        assertThat(month.trend()).hasSize(ApiDashboardService.MONTH_POINTS);
+        Instant monthLast = month.trend().getLast().startAt();
+        Instant currentHour = ApiMetricsRecorder.hourOf(month.generatedAt());
+        assertThat(monthLast).isBetween(currentHour.minusSeconds(2 * 3600L), currentHour);
+        assertThat(monthLast.atZone(java.time.ZoneId.of("Asia/Seoul")).getHour() % 3).isZero();
+        assertThat(month.trend()).allMatch(point -> point.spanMinutes() == 180);
         assertThat(month.trend().stream().mapToLong(ApiDashboardResponse.TrendPoint::requests).sum())
                 .isEqualTo(month.summary().requests());
         assertThat(month.ranking().bins()).hasSize(month.trend().size());
