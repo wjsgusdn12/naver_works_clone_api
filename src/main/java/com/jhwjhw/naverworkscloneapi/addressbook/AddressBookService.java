@@ -142,7 +142,7 @@ public class AddressBookService {
             return new MemberPageResponse(List.of(), 0, SUGGESTION_PAGE_SIZE, 0, 0);
         }
 
-        // 자동완성은 이름 순서로만 조회해 입력 중 결과가 흔들리지 않게 유지.
+        // 자동완성은 이름 순서로만 조회해 입력 중 결과가 흔들리지 않게 유지. 검색은 모든 회사 구성원 대상.
         return getMembers(
                 requesterMembershipId,
                 keyword,
@@ -154,7 +154,7 @@ public class AddressBookService {
                 "name",
                 "asc",
                 false,
-                false);
+                true);
     }
 
     @Transactional(readOnly = true)

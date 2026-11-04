@@ -68,6 +68,19 @@ class AddressBookStatusTests {
                 .claim("role", member.getRole().name()).build())).getTokenValue();
     }
 
+    // 주소록 검색(자동완성)은 다른 회사 구성원까지 찾음
+    @Test
+    void suggestSearchesMembersOfAllCompanies() throws Exception {
+        Company other = companies.save(new Company("다른 회사 " + UUID.randomUUID()));
+        UserAccount account = accounts.save(new UserAccount(UUID.randomUUID() + "@example.com", "test-hash", "가상다른회사원"));
+        Membership stranger = memberships.save(new Membership(other, account, null, Role.USER));
+        mvc.perform(get("/api/v1/addressBook/member/suggest").param("keyword", "가상다른회사")
+                .header("Authorization", "Bearer " + token(me)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements").value(1))
+                .andExpect(jsonPath("$.data.content[0].membershipId").value(stranger.getId()));
+    }
+
     @Test
     void setsStatusWithUntilAndClearsIt() throws Exception {
         Instant until = Instant.now().plus(Duration.ofHours(4));
