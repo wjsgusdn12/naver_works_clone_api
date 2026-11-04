@@ -12,13 +12,14 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.Instant;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReadParam;
@@ -29,6 +30,7 @@ import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,7 +38,10 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
-// 프로필 사진. 받은 사진은 원본을 남기지 않고, 가운데를 정사각형으로 잘라 SIDE px JPEG 하나로 줄여 저장.
+// 프로필 사진. 받은 사진은 원본을 남기지 않고, 가운데를 정사각형으로 잘라 SIDE px JPEG 하나로 줄여 DB에 저장
+// (membership_profile_image). 서버 디스크가 아니라 DB라서 어느 PC·서버에서 실행해도 같은 사진이 보임.
+// membership.profile_image_key는 사진의 판(version): "db/무작위"면 DB 사진, 그 밖은 예전 방식(디스크 파일) 키.
+// 예전 디스크 사진은 그 파일이 있는 서버가 뜰 때 DB로 옮김(migrateLegacy).
 // 휴대폰 사진의 회전 정보(EXIF)도 반영. 자바 기본 ImageIO만 사용(JPEG·PNG).
 @Service
 @RequiredArgsConstructor
@@ -50,6 +55,10 @@ public class ProfileImageService {
 
     private final MembershipRepository membershipRepository;
     private final FileStorage storage;
+    private final MembershipProfileImageRepository images;
+
+    // DB에 담긴 사진의 키 앞부분
+    static final String DB_PREFIX = "db/";
 
     // 사진 올리기. 이전 사진 파일은 저장이 끝난 뒤 지움.
     @Transactional
@@ -70,14 +79,7 @@ public class ProfileImageService {
             log.warn("Profile image decode failed. membershipId={}", membershipId, exception);
             throw invalid("사진을 읽지 못했습니다. 다른 사진으로 시도해 주세요.");
         }
-        String key;
-        try {
-            key = storage.save(new ByteArrayInputStream(jpeg));
-        } catch (IOException exception) {
-            log.error("Profile image save failed. membershipId={}", membershipId, exception);
-            throw new AuthException("PROFILE_IMAGE_SAVE_FAILED", "사진을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.");
-        }
-        replace(me, key);
+        replace(me, saveToDatabase(membershipId, jpeg));
     }
 
     // 기본 이미지(이름 글자)로 되돌리기
@@ -97,11 +99,49 @@ public class ProfileImageService {
         return result;
     }
 
-    // 사진 파일. 없으면 null.
+    // 사진 파일. 없으면 null. DB 사진이 기본이고, 아직 옮기지 못한 예전 사진은 디스크에서 읽음.
     @Transactional(readOnly = true)
     public Resource load(Long membershipId) {
-        return membershipRepository.findById(membershipId).map(Membership::getProfileImageKey)
-                .map(storage::load).orElse(null);
+        String key = membershipRepository.findById(membershipId).map(Membership::getProfileImageKey).orElse(null);
+        if (key == null) return null;
+        if (!key.startsWith(DB_PREFIX)) return storage.load(key);
+        return images.findById(membershipId).map(row -> (Resource) new ByteArrayResource(row.getImage()))
+                .orElse(null);
+    }
+
+    // 예전 방식(디스크 파일) 사진이 남은 구성원. [구성원 ID, 키]
+    @Transactional(readOnly = true)
+    public Map<Long, String> legacyKeys() {
+        Map<Long, String> result = new LinkedHashMap<>();
+        for (Object[] row : membershipRepository.findProfileImageKeys()) {
+            String key = (String) row[1];
+            if (!key.startsWith(DB_PREFIX)) result.put((Long) row[0], key);
+        }
+        return result;
+    }
+
+    // 예전 디스크 사진 하나를 DB로 옮김. 이 서버에 파일이 없으면(다른 PC에서 올린 사진) 건너뜀 → false.
+    // 옮기는 사이 사진이 바뀌었으면 건드리지 않음. 옮긴 뒤 디스크 파일은 지움.
+    @Transactional
+    public boolean migrateLegacy(Long membershipId, String legacyKey) throws IOException {
+        Resource file = storage.load(legacyKey);
+        if (file == null || !file.exists()) return false;
+        Membership member = membershipRepository.findById(membershipId).orElse(null);
+        if (member == null || !legacyKey.equals(member.getProfileImageKey())) return false;
+        byte[] jpeg;
+        try (InputStream in = file.getInputStream()) {
+            jpeg = in.readAllBytes();
+        }
+        replace(member, saveToDatabase(membershipId, jpeg));
+        return true;
+    }
+
+    // 사진 내용을 DB에 쓰고(있으면 덮어씀) 새 판 키를 돌려줌
+    private String saveToDatabase(Long membershipId, byte[] jpeg) {
+        Instant now = Instant.now();
+        images.findById(membershipId).ifPresentOrElse(row -> row.replace(jpeg, now),
+                () -> images.save(new MembershipProfileImage(membershipId, jpeg, now)));
+        return DB_PREFIX + UUID.randomUUID();
     }
 
     // 저장소 키의 마지막 조각(무작위 이름)을 판으로 씀. 키 전체(폴더 경로)는 화면에 내보내지 않음.
@@ -109,7 +149,7 @@ public class ProfileImageService {
         return key.substring(key.lastIndexOf('/') + 1);
     }
 
-    // 새 키로 바꾸고, DB 반영이 확정되면 이전 파일을 지움(되돌려지면 새 파일을 지움).
+    // 새 키로 바꾸고, DB 반영이 확정되면 예전 디스크 파일을 지움. DB 사진 키는 파일이 없어 지울 것도 없음.
     private void replace(Membership me, String newKey) {
         String oldKey = me.getProfileImageKey();
         me.changeProfileImage(newKey);
@@ -118,13 +158,12 @@ public class ProfileImageService {
             @Override
             public void afterCompletion(int status) {
                 if (status == STATUS_COMMITTED) deleteQuietly(oldKey);
-                else deleteQuietly(newKey);
             }
         });
     }
 
     private void deleteQuietly(String key) {
-        if (key == null) return;
+        if (key == null || key.startsWith(DB_PREFIX)) return;
         try {
             storage.delete(key);
         } catch (IOException | RuntimeException exception) {

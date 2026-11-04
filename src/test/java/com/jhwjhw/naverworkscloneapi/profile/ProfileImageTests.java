@@ -39,6 +39,8 @@ class ProfileImageTests {
     @Autowired private CompanyRepository companies;
     @Autowired private UserAccountRepository accounts;
     @Autowired private MembershipRepository memberships;
+    @Autowired private MembershipProfileImageRepository images;
+    @Autowired private com.jhwjhw.naverworkscloneapi.common.storage.FileStorage storage;
 
     private Membership me;
 
@@ -82,6 +84,33 @@ class ProfileImageTests {
         service.remove(me.getId());
         assertThat(service.versions()).isEmpty();
         assertThat(service.load(me.getId())).isNull();
+    }
+
+    // 사진 내용은 DB에 담기고, 예전 방식(디스크 파일) 사진은 DB로 옮겨짐. 이 서버에 파일이 없으면 건너뜀.
+    @Test
+    void photoIsStoredInDatabaseAndLegacyFileIsMigrated() throws Exception {
+        service.change(me.getId(), new MockMultipartFile("file", "가상.png", "image/png",
+                png(new BufferedImage(300, 300, BufferedImage.TYPE_INT_RGB))));
+        assertThat(me.getProfileImageKey()).startsWith(ProfileImageService.DB_PREFIX);
+        assertThat(images.findById(me.getId())).isPresent();
+
+        // 예전 방식: 디스크 파일 키가 DB에 있던 상태
+        byte[] legacyJpeg = { (byte) 0xFF, (byte) 0xD8, 1, 2, 3 };
+        String legacyKey = storage.save(new java.io.ByteArrayInputStream(legacyJpeg));
+        me.changeProfileImage(legacyKey);
+        assertThat(service.legacyKeys()).containsEntry(me.getId(), legacyKey);
+
+        assertThat(service.migrateLegacy(me.getId(), legacyKey)).isTrue();
+        assertThat(me.getProfileImageKey()).startsWith(ProfileImageService.DB_PREFIX);
+        assertThat(service.legacyKeys()).isEmpty();
+        try (InputStream in = service.load(me.getId()).getInputStream()) {
+            assertThat(in.readAllBytes()).isEqualTo(legacyJpeg);
+        }
+
+        // 이 서버에 없는 파일(다른 PC에서 올린 사진)은 건너뜀
+        me.changeProfileImage("2026/11/04/missing-file");
+        assertThat(service.migrateLegacy(me.getId(), "2026/11/04/missing-file")).isFalse();
+        assertThat(me.getProfileImageKey()).isEqualTo("2026/11/04/missing-file");
     }
 
     @Test
