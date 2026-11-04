@@ -745,20 +745,26 @@ public class ChatRoomService {
         }
     }
 
-    // 보낸 사람을 뺀 활성 참여자에게 방별 알림 설정(끔·멘션만·전체)을 지켜 서비스 알림을 남김.
+    // 알림 목록에는 나를 콕 집은 메시지(@멘션·내 메시지에 단 답장)만 남김. 일반 메시지는 대화방 안 읽음 숫자와
+    // 실시간 토스트로만 알리고 목록에는 쌓지 않음(Slack·Teams 방식). 방 알림을 끈 참여자는 멘션·답장도 받지 않음.
     private void notifyMessage(ChatRoom room, Membership sender, ChatMessage message) {
         String senderName = sender.getUserAccount().getDisplayName();
         // 그룹방은 방 이름, 1:1·나와의 채팅은 보낸 사람 이름을 제목으로 사용.
         String title = room.getRoomType() == ChatRoomType.GROUP && room.getName() != null ? room.getName() : senderName;
-        String body = senderName + ": " + message.getContent();
         String linkPath = "/message?roomId=" + room.getId();
+        ChatMessage original = message.getReplyToMessage();
+        Long repliedMemberId = original == null ? null : original.getSenderMembership().getId();
         for (ChatRoomMember member : memberRepository.findByChatRoomIdAndLeftAtIsNull(room.getId())) {
             Long memberId = member.getMembership().getId();
             if (memberId.equals(sender.getId()) || member.getNotificationMode() == ChatNotificationMode.NONE) {
                 continue;
             }
-            if (member.getNotificationMode() == ChatNotificationMode.MENTION
-                    && !message.getMentionedMembershipIds().contains(memberId)) {
+            String body;
+            if (message.getMentionedMembershipIds().contains(memberId)) {
+                body = senderName + "님이 회원님을 언급했습니다: " + message.getContent();
+            } else if (memberId.equals(repliedMemberId)) {
+                body = senderName + "님이 회원님의 메시지에 답장했습니다: " + message.getContent();
+            } else {
                 continue;
             }
             notificationService.create(memberId, NotificationCategory.MESSAGE, title, body, linkPath);

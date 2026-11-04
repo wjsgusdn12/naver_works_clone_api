@@ -87,9 +87,13 @@ class NotificationTests {
         return memberships.save(new Membership(company, account, null, Role.USER));
     }
 
-    private void send(String content, List<Long> mentions) {
-        chatRoomService.sendMessage(author.getId(), room.getId(),
-                new ChatRoomRequest.MessageCreateRequest(content, mentions, null));
+    private Long send(String content, List<Long> mentions) {
+        return send(author, content, mentions, null);
+    }
+
+    private Long send(Membership sender, String content, List<Long> mentions, Long replyToMessageId) {
+        return chatRoomService.sendMessage(sender.getId(), room.getId(),
+                new ChatRoomRequest.MessageCreateRequest(content, mentions, replyToMessageId)).id();
     }
 
     private String token(Membership member) {
@@ -101,39 +105,52 @@ class NotificationTests {
     }
 
     @Test
-    void messageNotifiesOnlyRecipientsWhoseRoomSettingAllowsIt() {
+    void plainMessageIsNotAddedToNotificationList() {
         send("일반 메시지", List.of());
         assertThat(service.list(author.getId(), null)).isEmpty();
+        assertThat(service.list(listener.getId(), null)).isEmpty();
         assertThat(service.list(muted.getId(), null)).isEmpty();
         assertThat(service.list(mentionOnly.getId(), null)).isEmpty();
+        assertThat(events.stream(NotificationCreatedEvent.class)).isEmpty();
+    }
+
+    @Test
+    void mentionNotifiesOnlyMentionedMembersWhoseRoomIsNotMuted() {
+        send("@멘션 메시지", List.of(listener.getId(), mentionOnly.getId(), muted.getId()));
         List<NotificationResponse.Item> received = service.list(listener.getId(), null);
         assertThat(received).hasSize(1);
         assertThat(received.getFirst().category()).isEqualTo("MESSAGE");
         assertThat(received.getFirst().title()).isEqualTo("알림방");
-        assertThat(received.getFirst().body()).isEqualTo("테스트 사용자: 일반 메시지");
+        assertThat(received.getFirst().body()).isEqualTo("테스트 사용자님이 회원님을 언급했습니다: @멘션 메시지");
         assertThat(received.getFirst().linkPath()).isEqualTo("/message?roomId=" + room.getId());
         assertThat(received.getFirst().read()).isFalse();
-        // 받는 사람 수만큼 커밋 이후 전달용 이벤트가 발행됨.
+        assertThat(service.list(mentionOnly.getId(), NotificationCategory.MESSAGE)).hasSize(1);
+        // 방 알림을 끈 참여자는 멘션돼도 받지 않음.
+        assertThat(service.list(muted.getId(), null)).isEmpty();
         assertThat(events.stream(NotificationCreatedEvent.class).map(NotificationCreatedEvent::membershipId))
-                .containsExactly(listener.getId());
+                .containsExactlyInAnyOrder(listener.getId(), mentionOnly.getId());
     }
 
     @Test
-    void mentionOnlyMemberIsNotifiedWhenMentioned() {
-        send("@멘션 메시지", List.of(mentionOnly.getId()));
-        assertThat(service.list(mentionOnly.getId(), NotificationCategory.MESSAGE)).hasSize(1);
-        assertThat(service.list(mentionOnly.getId(), NotificationCategory.SYSTEM)).isEmpty();
+    void replyNotifiesOriginalSenderOnly() {
+        Long originalId = send(listener, "원래 메시지", List.of(), null);
+        send(author, "답장입니다", List.of(), originalId);
+        List<NotificationResponse.Item> received = service.list(listener.getId(), null);
+        assertThat(received).hasSize(1);
+        assertThat(received.getFirst().body()).isEqualTo("테스트 사용자님이 회원님의 메시지에 답장했습니다: 답장입니다");
+        assertThat(service.list(author.getId(), null)).isEmpty();
+        assertThat(service.list(mentionOnly.getId(), null)).isEmpty();
     }
 
     @Test
     void apiListsOwnNotificationsAndMarksThemRead() throws Exception {
-        send("첫 번째", List.of());
-        send("두 번째", List.of());
+        send("첫 번째", List.of(listener.getId()));
+        send("두 번째", List.of(listener.getId()));
         mvc.perform(get("/api/v1/notification").header("Authorization", "Bearer " + token(listener)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(2))
                 // 최신 알림이 먼저 옴.
-                .andExpect(jsonPath("$.data[0].body").value("테스트 사용자: 두 번째"))
+                .andExpect(jsonPath("$.data[0].body").value("테스트 사용자님이 회원님을 언급했습니다: 두 번째"))
                 .andExpect(jsonPath("$.data[0].read").value(false));
         mvc.perform(post("/api/v1/notification/readAll").header("Authorization", "Bearer " + token(listener)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(2));
@@ -142,7 +159,7 @@ class NotificationTests {
 
     @Test
     void apiRejectsReadingAnotherMembersNotification() throws Exception {
-        send("남의 알림", List.of());
+        send("남의 알림", List.of(listener.getId()));
         Long notificationId = service.list(listener.getId(), null).getFirst().id();
         mvc.perform(post("/api/v1/notification/read").param("notificationId", notificationId.toString())
                 .header("Authorization", "Bearer " + token(author)))
