@@ -30,6 +30,7 @@ import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -56,6 +57,7 @@ public class ProfileImageService {
     private final MembershipRepository membershipRepository;
     private final FileStorage storage;
     private final MembershipProfileImageRepository images;
+    private final ApplicationEventPublisher eventPublisher;
 
     // DB에 담긴 사진의 키 앞부분
     static final String DB_PREFIX = "db/";
@@ -150,9 +152,11 @@ public class ProfileImageService {
     }
 
     // 새 키로 바꾸고, DB 반영이 확정되면 예전 디스크 파일을 지움. DB 사진 키는 파일이 없어 지울 것도 없음.
+    // 다른 사람 화면의 아바타도 바로 바뀌도록 커밋 뒤 실시간으로 알림.
     private void replace(Membership me, String newKey) {
         String oldKey = me.getProfileImageKey();
         me.changeProfileImage(newKey);
+        eventPublisher.publishEvent(new ProfileImageChangedEvent(me.getId(), newKey == null ? null : versionOf(newKey)));
         if (!TransactionSynchronizationManager.isSynchronizationActive()) return;
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override

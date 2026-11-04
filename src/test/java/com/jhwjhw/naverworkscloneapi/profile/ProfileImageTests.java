@@ -24,6 +24,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest(properties = {
@@ -33,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 })
 @ActiveProfiles("test")
 @Transactional
+@RecordApplicationEvents
 // 프로필 사진: 정사각형 256px JPEG로 줄여 저장, 형식·크기 제한, 기본 이미지로 되돌리기. 모두 가상 데이터.
 class ProfileImageTests {
     @Autowired private ProfileImageService service;
@@ -41,6 +44,7 @@ class ProfileImageTests {
     @Autowired private MembershipRepository memberships;
     @Autowired private MembershipProfileImageRepository images;
     @Autowired private com.jhwjhw.naverworkscloneapi.common.storage.FileStorage storage;
+    @Autowired private ApplicationEvents events;
 
     private Membership me;
 
@@ -79,11 +83,17 @@ class ProfileImageTests {
         // 바꾸면 판이 달라짐
         String first = service.versions().get(me.getId());
         service.change(me.getId(), new MockMultipartFile("file", "가상2.png", "image/png", png(wide)));
-        assertThat(service.versions().get(me.getId())).isNotEqualTo(first);
+        String second = service.versions().get(me.getId());
+        assertThat(second).isNotEqualTo(first);
 
         service.remove(me.getId());
         assertThat(service.versions()).isEmpty();
         assertThat(service.load(me.getId())).isNull();
+
+        // 바꿀 때마다 "사진 바뀜" 소식이 남고(커밋 뒤 실시간 방송), 지우면 판이 비어 있음
+        assertThat(events.stream(ProfileImageChangedEvent.class).map(ProfileImageChangedEvent::version))
+                .containsExactly(first, second, null);
+        assertThat(events.stream(ProfileImageChangedEvent.class)).allMatch(event -> event.membershipId().equals(me.getId()));
     }
 
     // 사진 내용은 DB에 담기고, 예전 방식(디스크 파일) 사진은 DB로 옮겨짐. 이 서버에 파일이 없으면 건너뜀.
@@ -111,6 +121,15 @@ class ProfileImageTests {
         me.changeProfileImage("2026/11/04/missing-file");
         assertThat(service.migrateLegacy(me.getId(), "2026/11/04/missing-file")).isFalse();
         assertThat(me.getProfileImageKey()).isEqualTo("2026/11/04/missing-file");
+    }
+
+    // 여러 서버용 Redis 방송 글자: 보낸 소식이 그대로 되살아남(사진을 지운 소식은 판이 null)
+    @Test
+    void broadcastMessageRoundTrip() {
+        ProfileImageRealtimeEvent changed = ProfileImageRealtimeEvent.of(7L, "3f2a-uuid");
+        assertThat(RedisProfileImageBroadcaster.decode(RedisProfileImageBroadcaster.encode(changed))).isEqualTo(changed);
+        ProfileImageRealtimeEvent removed = ProfileImageRealtimeEvent.of(8L, null);
+        assertThat(RedisProfileImageBroadcaster.decode(RedisProfileImageBroadcaster.encode(removed))).isEqualTo(removed);
     }
 
     @Test
