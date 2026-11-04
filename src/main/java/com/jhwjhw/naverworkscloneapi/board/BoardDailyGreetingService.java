@@ -17,7 +17,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// 매일 자유게시판에 관리자 계정으로 인사 글을 올림(BoardDailyGreetingScheduler가 부름).
+// 매일 자유게시판에 시스템 글(사람 글쓴이 없음)로 인사 글을 올리고 모든 구성원에게 알림(BoardDailyGreetingScheduler가 부름).
 // 글과 날짜 기록을 한 트랜잭션에 저장하므로, 다른 서버가 같은 날 먼저 올렸으면 날짜 기본 키 충돌로 이쪽 글까지 함께 취소됨.
 @Service
 @Slf4j
@@ -31,7 +31,7 @@ public class BoardDailyGreetingService {
     private final UserAccountRepository accountRepository;
     private final MembershipRepository membershipRepository;
     private final BoardMarketReportService reportService;
-    // 글쓴이 계정 아이디. 기본은 처음 만든 관리자 계정.
+    // 게시판이 아직 하나도 없을 때 공통 게시판을 만들 계정 아이디. 기본은 처음 만든 관리자 계정.
     private final String loginId;
 
     public BoardDailyGreetingService(BoardService boardService, BoardRepository boardRepository,
@@ -51,25 +51,22 @@ public class BoardDailyGreetingService {
         return date.format(TITLE_DATE) + " 입니다, 오늘도 좋은 하루 보내세요!";
     }
 
-    // 그 날짜 인사 글이 없으면 올림. 올렸으면 true, 이미 있거나 글쓴이 계정이 없으면 false.
+    // 그 날짜 인사 글이 없으면 올림. 올렸으면 true, 이미 있거나 게시판을 만들 수 없으면 false.
     @Transactional
     public boolean postIfMissing(LocalDate date) {
         if (greetingRepository.existsById(date)) return false;
-        Optional<Membership> writer = accountRepository.findByLoginId(loginId)
-                .flatMap(account -> membershipRepository.findByUserAccountId(account.getId()));
-        if (writer.isEmpty()) {
-            log.warn("Daily greeting skipped: writer account not found. loginId={}", loginId);
-            return false;
+        if (freeBoardId().isEmpty()) {
+            // 아무도 게시판에 들어간 적이 없으면 공통 게시판이 아직 없을 수 있어 관리자 계정으로 먼저 만듦
+            Optional<Membership> admin = accountRepository.findByLoginId(loginId)
+                    .flatMap(account -> membershipRepository.findByUserAccountId(account.getId()));
+            if (admin.isEmpty()) {
+                log.warn("Daily greeting skipped: no board and admin account not found. loginId={}", loginId);
+                return false;
+            }
+            boardService.ensureBoards(admin.get().getId());
         }
-        Long membershipId = writer.get().getId();
-        Long boardId = freeBoardId().orElseGet(() -> {
-            // 아무도 게시판에 들어간 적이 없으면 공통 게시판이 아직 없을 수 있어 먼저 만듦
-            boardService.ensureBoards(membershipId);
-            return freeBoardId().orElseThrow();
-        });
-        BoardResponse.PostDetail post = boardService.create(membershipId, new BoardRequest.PostCreate(boardId,
-                titleOf(date), contentJson(date), false, false, List.of()));
-        greetingRepository.saveAndFlush(new BoardDailyGreeting(date, post.id()));
+        Long postId = boardService.createSystemPost(BoardType.FREE, titleOf(date), contentJson(date));
+        greetingRepository.saveAndFlush(new BoardDailyGreeting(date, postId));
         return true;
     }
 

@@ -18,9 +18,14 @@ public class BoardPost {
     @JoinColumn(name = "board_id", nullable = false)
     private Board board;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "author_membership_id", nullable = false)
+    // 글쓴이. 시스템 글(authorType = SYSTEM)이면 null.
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "author_membership_id")
     private Membership author;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "author_type", nullable = false, length = 20)
+    private PostAuthorType authorType = PostAuthorType.MEMBER;
 
     @Column(nullable = false, length = 200)
     private String title;
@@ -100,6 +105,17 @@ public class BoardPost {
         this.mustRead = mustRead;
         this.createdAt = Instant.now();
         this.activityAt = this.createdAt;
+    }
+
+    // 서버가 자동으로 올리는 시스템 글(사람 글쓴이 없음)
+    public static BoardPost system(Board board, String title, String contentJson, String contentText) {
+        BoardPost post = new BoardPost(board, null, title, contentJson, contentText, false, false);
+        post.authorType = PostAuthorType.SYSTEM;
+        return post;
+    }
+
+    public boolean isSystem() {
+        return authorType == PostAuthorType.SYSTEM;
     }
 
     public void edit(String title, String contentJson, String contentText, boolean important, boolean mustRead) {

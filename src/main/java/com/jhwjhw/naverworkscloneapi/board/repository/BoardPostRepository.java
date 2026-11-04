@@ -48,11 +48,11 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
     // 글 목록(쪽 번호). 볼 수 있는 게시판(boardIds) 안에서만 찾고,
     // 관리자가 아니면 남의 문의하기 글(hiddenType)은 뺌. 필터는 false면 적용하지 않음(unread: 내가 안 읽은 글만).
     // 정렬: activity면 글/댓글 업데이트 순(이전 글은 등록 시각으로), 아니면 등록순. 둘 다 최신이 위.
-    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
-            + "join fetch a.userAccount u " + PAGE_WHERE
+    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company left join fetch p.author a "
+            + "left join fetch a.userAccount u " + PAGE_WHERE
             + "order by case when :activity = true then coalesce(p.activityAt, p.createdAt) else p.createdAt end "
             + "desc, p.id desc",
-            countQuery = "select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u "
+            countQuery = "select count(p) from BoardPost p join p.board b left join p.author a left join a.userAccount u "
                     + PAGE_WHERE)
     Page<BoardPost> findPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType,
@@ -64,7 +64,7 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             Pageable pageable);
 
     // 검색 결과 탭의 건수(목록과 같은 조건, 글은 가져오지 않음)
-    @Query("select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u " + PAGE_WHERE)
+    @Query("select count(p) from BoardPost p join p.board b left join p.author a left join a.userAccount u " + PAGE_WHERE)
     long countPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType,
             @Param("mustRead") boolean mustRead, @Param("important") boolean important,
@@ -77,9 +77,9 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             + "and (:admin = true or p.deletedBy.id = :me) " + SEARCH;
 
     // 휴지통: since 이후에 지운 글. 관리자가 아니면 내가 지운 글만.
-    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company join fetch p.author a "
-            + "join fetch a.userAccount u " + TRASH_WHERE + "order by p.id desc",
-            countQuery = "select count(p) from BoardPost p join p.board b join p.author a join a.userAccount u "
+    @Query(value = "select p from BoardPost p join fetch p.board b join fetch b.company left join fetch p.author a "
+            + "left join fetch a.userAccount u " + TRASH_WHERE + "order by p.id desc",
+            countQuery = "select count(p) from BoardPost p join p.board b left join p.author a left join a.userAccount u "
                     + TRASH_WHERE)
     Page<BoardPost> findTrash(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
             @Param("admin") boolean admin, @Param("since") Instant since, @Param("search") boolean search,
@@ -88,7 +88,7 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             Pageable pageable);
 
     @Query("select p from BoardPost p join fetch p.board b join fetch b.company left join fetch b.department "
-            + "join fetch p.author a join fetch a.userAccount left join fetch a.department where p.id = :id")
+            + "left join fetch p.author a left join fetch a.userAccount left join fetch a.department where p.id = :id")
     Optional<BoardPost> findDetailById(@Param("id") Long id);
 
     // 조회수 1 올리기. 수정 충돌 검사(version)와 겹치지 않게 엔티티를 거치지 않고 바로 바꿈.

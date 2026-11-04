@@ -474,12 +474,12 @@ public class BoardService {
                 post.getBoard().getName(), post.getBoard().getType(),
                 post.getBoard().getType().common() ? "" : post.getBoard().getCompany().getName(),
                 post.getTitle(), preview(post.getContentText(), previewKeyword),
-                post.getAuthor().getId(), post.getAuthor().getUserAccount().getDisplayName(), post.getCreatedAt(),
+                authorId(post), authorName(post), post.getCreatedAt(),
                 marked.contains(post.getId()), post.isMustRead(), read.contains(post.getId()), post.getViewCount(),
                 post.getCommentCount(), withFiles.contains(post.getId()), post.getAnsweredAt() != null,
                 post.getDeletedAt(), post.getStatus(), post.getPublishAt(),
                 reactionCounts.getOrDefault(post.getId(), 0), matchTexts.get(post.getId()),
-                daily.contains(post.getId()))).toList();
+                daily.contains(post.getId()), post.isSystem())).toList();
     }
 
     private static String preview(String text) {
@@ -535,11 +535,11 @@ public class BoardService {
                 .map(BoardService::attachment).toList();
         boolean favorite = favoriteRepository.findByMembershipIdAndBoardId(viewer.id(), post.getBoard().getId())
                 .isPresent();
-        Department department = post.getAuthor().getDepartment();
+        Department department = post.isSystem() ? null : post.getAuthor().getDepartment();
         boolean live = !post.isDeleted() && post.isPublished();
         return new BoardResponse.PostDetail(post.getId(), boardItem(viewer, post.getBoard(), favorite),
-                post.getTitle(), post.getContentJson(), post.getAuthor().getId(),
-                post.getAuthor().getUserAccount().getDisplayName(), department == null ? null : department.getName(),
+                post.getTitle(), post.getContentJson(), authorId(post),
+                authorName(post), department == null ? null : department.getName(),
                 post.getCreatedAt(), post.getUpdatedAt(),
                 importantRepository.existsByPostIdAndMembershipId(postId, viewer.id()), post.isMustRead(),
                 post.getViewCount(),
@@ -548,7 +548,7 @@ public class BoardService {
                 canRestore(viewer, post), post.isMustRead() && post.isPublished() && (author || viewer.admin()),
                 !post.isDeleted() && post.isPublished() && post.isAllowComment(), post.getStatus(), post.getPublishAt(),
                 post.isAllowComment(), post.isCommentNotify(), reactions(viewer, postId), live,
-                dailyGreetingRepository.existsByPostId(postId));
+                dailyGreetingRepository.existsByPostId(postId), post.isSystem());
     }
 
     // 댓글과 답글(오래된 순). 지운 댓글에 답글이 남아 있으면 그 자리를 "삭제된 댓글"로 남겨 답글이 떠다니지 않게 함.
@@ -672,6 +672,23 @@ public class BoardService {
                 publishAt);
         postRepository.flush();
         return detail(membershipId, post.getId());
+    }
+
+    // 서버가 자동으로 올리는 시스템 글(매일 브리핑 등). 사람 글쓴이 없이 바로 등록하고,
+    // 그 게시판을 볼 수 있는 모든 구성원에게 시스템 알림을 보냄. 댓글은 받되 글쓴이 알림은 없음.
+    // 공통 게시판이면 그 종류의 대표 게시판(처음 만든 것)에 올림. 돌려주는 값은 새 글 ID.
+    @Transactional
+    public Long createSystemPost(BoardType type, String title, String contentJson) {
+        Board board = boardRepository.findByTypes(List.of(type)).stream()
+                .min(java.util.Comparator.comparing(Board::getId))
+                .orElseThrow(() -> new BoardException("BOARD_NOT_FOUND", "게시판을 찾을 수 없습니다."));
+        BoardContent.Sanitized body = content.sanitize(contentJson);
+        BoardPost post = postRepository.save(BoardPost.system(board, title(title, BoardRequest.SaveMode.PUBLISH),
+                body.json(), body.text()));
+        applyCommentOptions(post, true, false);
+        postRepository.flush();
+        notifySystemPost(post);
+        return post.getId();
     }
 
     @Transactional
@@ -823,7 +840,8 @@ public class BoardService {
         for (Long postId : postRepository.findDueScheduledIds(now)) {
             if (postRepository.publishScheduled(postId, now) != 1) continue;
             BoardPost post = postRepository.findDetailById(postId).orElseThrow();
-            notifyNewPost(new Viewer(post.getAuthor(), post.getAuthor().effectiveRole() == Role.ADMIN), post);
+            if (post.isSystem()) notifySystemPost(post);
+            else notifyNewPost(new Viewer(post.getAuthor(), post.getAuthor().effectiveRole() == Role.ADMIN), post);
             published++;
         }
         return published;
@@ -853,17 +871,27 @@ public class BoardService {
         }
     }
 
+    // 시스템 글 알림: 그 게시판을 볼 수 있는 모든 구성원에게(시스템 분류, 누르면 그 글로)
+    private void notifySystemPost(BoardPost post) {
+        String link = postLink(post);
+        for (Membership reader : readersOf(post.getBoard())) {
+            notificationService.create(reader.getId(), NotificationCategory.SYSTEM, "새 시스템 글",
+                    "[" + post.getBoard().getName() + "] " + post.getTitle(), link);
+        }
+    }
+
     // 내 글에 남이 댓글을 달면 글쓴이에게. 문의하기에 관리자가 달면 "문의 답변 완료".
     // 답글이면 답한 댓글의 작성자에게 "새 답글"(그 사람이 글쓴이면 아래 글쓴이 알림 하나만).
     private void notifyComment(Viewer viewer, BoardPost post, String text, boolean answer, BoardComment target) {
         String writer = viewer.me().getUserAccount().getDisplayName();
-        Long authorId = post.getAuthor().getId();
+        // 시스템 글은 사람 글쓴이가 없어 글쓴이 알림 없음
+        Long authorId = authorId(post);
         Long targetAuthorId = target == null ? null : target.getAuthor().getId();
         if (targetAuthorId != null && !targetAuthorId.equals(viewer.id()) && !targetAuthorId.equals(authorId)) {
             notificationService.create(targetAuthorId, NotificationCategory.SYSTEM, "새 답글",
                     writer + "님 (" + post.getTitle() + "): " + text, postLink(post));
         }
-        if (authorId.equals(viewer.id()) || !post.isCommentNotify()) return;
+        if (authorId == null || authorId.equals(viewer.id()) || !post.isCommentNotify()) return;
         notificationService.create(authorId, NotificationCategory.SYSTEM, answer ? "문의 답변 완료" : "새 댓글",
                 writer + "님 (" + post.getTitle() + "): " + text, postLink(post));
     }
@@ -1041,8 +1069,20 @@ public class BoardService {
         return post;
     }
 
+    // 글쓴이 권한(수정·삭제·읽음 현황). 시스템 글은 사람 글쓴이가 없어 관리자가 글쓴이 권한을 가짐.
     private static boolean isAuthor(Viewer viewer, BoardPost post) {
-        return post.getAuthor().getId().equals(viewer.id());
+        return post.isSystem() ? viewer.admin() : post.getAuthor().getId().equals(viewer.id());
+    }
+
+    // 화면에 보일 글쓴이 이름·ID. 시스템 글은 "시스템", ID 없음.
+    static final String SYSTEM_AUTHOR_NAME = "시스템";
+
+    private static Long authorId(BoardPost post) {
+        return post.isSystem() ? null : post.getAuthor().getId();
+    }
+
+    private static String authorName(BoardPost post) {
+        return post.isSystem() ? SYSTEM_AUTHOR_NAME : post.getAuthor().getUserAccount().getDisplayName();
     }
 
     private static BoardException postNotFound() {

@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 })
 @ActiveProfiles("test")
 @Transactional
-// 매일 자유게시판 인사 글: 제목·본문·글쓴이·게시판, 같은 날 두 번 안 올라감. 모두 가상 데이터.
+// 매일 자유게시판 인사 글: 제목·본문·시스템 글쓴이·게시판·전체 알림, 같은 날 두 번 안 올라감. 모두 가상 데이터.
 class BoardDailyGreetingTests {
     @Autowired private BoardDailyGreetingService greetingService;
     @Autowired private BoardDailyGreetingRepository greetings;
@@ -37,6 +37,8 @@ class BoardDailyGreetingTests {
     @Autowired private CompanyRepository companies;
     @Autowired private UserAccountRepository accounts;
     @Autowired private MembershipRepository memberships;
+    @Autowired private BoardService boardService;
+    @Autowired private com.jhwjhw.naverworkscloneapi.notification.repository.NotificationRepository notifications;
 
     private Membership admin() {
         Company company = companies.save(new Company("가상 인사 회사"));
@@ -57,12 +59,26 @@ class BoardDailyGreetingTests {
         BoardPost post = posts.findById(greetings.findById(day).orElseThrow().getPostId()).orElseThrow();
         assertThat(post.getTitle()).isEqualTo("2026년 11월 03일 입니다, 오늘도 좋은 하루 보내세요!");
         assertThat(post.getContentText()).contains(BoardDailyGreetingService.CONTENT_TEXT);
-        assertThat(post.getAuthor().getId()).isEqualTo(admin.getId());
+        // 시스템 글: 사람 글쓴이 없음
+        assertThat(post.isSystem()).isTrue();
+        assertThat(post.getAuthor()).isNull();
         assertThat(post.getBoard().getType()).isEqualTo(BoardType.FREE);
         assertThat(greetings.count()).isEqualTo(2);
+
+        // 화면에는 글쓴이 "시스템", 관리자가 글쓴이 권한(수정·삭제), 모든 구성원에게 시스템 알림
+        BoardResponse.PostDetail detail = boardService.detail(admin.getId(), post.getId());
+        assertThat(detail.system()).isTrue();
+        assertThat(detail.authorMembershipId()).isNull();
+        assertThat(detail.authorName()).isEqualTo("시스템");
+        assertThat(detail.canEdit()).isTrue();
+        assertThat(notifications.findAll()).anySatisfy(row -> {
+            assertThat(row.getMembership().getId()).isEqualTo(admin.getId());
+            assertThat(row.getLinkPath()).isEqualTo("/board?postId=" + post.getId());
+        });
     }
 
     @Test
+    // 게시판이 하나도 없고 게시판을 만들 관리자 계정도 없으면 건너뜀
     void skipsWhenWriterAccountMissing() {
         assertThat(greetingService.postIfMissing(LocalDate.of(2026, 11, 3))).isFalse();
         assertThat(greetings.count()).isZero();

@@ -26,7 +26,7 @@ public final class BoardResponse {
             String title, String preview, Long authorMembershipId, String authorName, Instant createdAt, boolean important,
             boolean mustRead, boolean read, int viewCount, int commentCount, boolean hasFile, boolean answered,
             Instant deletedAt, PostStatus status, Instant publishAt, int reactionCount, String matchText,
-            boolean daily) {
+            boolean daily, boolean system) {
     }
 
     // 검색 결과 탭별 건수(게시글: 제목·본문, 작성자, 파일, 댓글)
@@ -63,7 +63,7 @@ public final class BoardResponse {
             List<Attachment> attachments, List<Comment> comments, boolean canEdit, boolean canDelete,
             boolean canRestore, boolean canSeeReaders, boolean canComment, PostStatus status, Instant publishAt,
             boolean allowComment, boolean commentNotify, List<Reaction> reactions, boolean canReact,
-            boolean daily) {
+            boolean daily, boolean system) {
     }
 
     // companyName: 공통 게시판은 여러 회사 사람이 섞이므로 함께 보여 줌
