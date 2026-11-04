@@ -256,6 +256,37 @@ class ApiDashboardTests {
     }
 
     // 숫자 카드 증감 비교: 직전 같은 길이 기간(최근 7일이면 그 전 7일)의 합계가 따로 내려오고, 지금 기간에는 섞이지 않음.
+    // 요청 수를 영역(메시지·주소록·게시판·알림·계정·기타)별로 나눔. 영역 합계는 그 칸의 요청 수와 같음.
+    @Test
+    void requestsAreSplitByDomain() {
+        assertThat(ApiDomain.indexOf("GET /api/v1/chatRoom")).isZero();
+        assertThat(ApiDomain.indexOf("POST /api/v1/chatRoom/message/create")).isZero();
+        assertThat(ApiDomain.indexOf("GET /api/v1/addressBook/member")).isEqualTo(1);
+        assertThat(ApiDomain.indexOf("GET /api/v1/board/post/list")).isEqualTo(2);
+        assertThat(ApiDomain.indexOf("GET /api/v1/notification")).isEqualTo(3);
+        assertThat(ApiDomain.indexOf("POST /api/v1/auth/login")).isEqualTo(4);
+        assertThat(ApiDomain.indexOf("GET /api/v1/profile/image/list")).isEqualTo(4);
+        // 앞부분만 같은 다른 주소, 컨트롤러 도달 전 종료는 기타
+        assertThat(ApiDomain.indexOf("GET /api/v1/boardX")).isEqualTo(5);
+        assertThat(ApiDomain.indexOf(ApiMetricsFilter.UNMATCHED)).isEqualTo(5);
+
+        Instant hour = ApiMetricsRecorder.hourOf(Instant.now()).minusSeconds(30 * 3600L);
+        MetricsBucket past = new MetricsBucket();
+        for (int i = 0; i < 3; i++) past.record("GET /api/v1/board/post/list", 200, 40);
+        past.record("POST /api/v1/chatRoom/message/create", 200, 40);
+        past.record("GET /api/v1/somethingElse", 200, 40);
+        hourlyRepository.addHour(hour, past);
+
+        ApiDashboardResponse week = dashboardService.dashboard(ApiDashboardService.Range.WEEK);
+        assertThat(week.domains()).containsExactly("메시지", "주소록", "게시판", "알림", "계정", "기타");
+        ApiDashboardResponse.TrendPoint point = week.trend().stream()
+                .filter(item -> item.startAt().equals(hour)).findFirst().orElseThrow();
+        assertThat(point.domainRequests()).containsExactly(1L, 0L, 3L, 0L, 0L, 1L);
+        // 모든 칸에서 영역 합계 = 요청 수
+        assertThat(week.trend()).allMatch(item ->
+                item.domainRequests().stream().mapToLong(Long::longValue).sum() == item.requests());
+    }
+
     @Test
     void previousPeriodSummaryIsReturnedForComparison() {
         // 지금 시간에서 200시간 전 = 직전 7일 구간(168~336시간 전) 안의 온전한 한 시간

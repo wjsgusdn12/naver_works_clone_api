@@ -125,6 +125,17 @@ public class ApiMetricHourlyRepository {
         return result;
     }
 
+    // [from, to) 기간의 시간별·API별 호출 수(요청 수 그래프를 영역별로 나누는 데 씀). 전체 합계 행은 뺌.
+    public Map<Instant, Map<String, Long>> readEndpointCountsByHour(Instant from, Instant to) {
+        Map<Instant, Map<String, Long>> result = new HashMap<>();
+        jdbc.query("SELECT hour_start, endpoint, request_count FROM api_metric_hourly "
+                + "WHERE endpoint <> ? AND hour_start >= ? AND hour_start < ?", resultSet -> {
+                    result.computeIfAbsent(resultSet.getTimestamp("hour_start").toInstant(), key -> new HashMap<>())
+                            .merge(resultSet.getString("endpoint"), resultSet.getLong("request_count"), Long::sum);
+                }, TOTAL, Timestamp.from(from), Timestamp.from(to));
+        return result;
+    }
+
     // [from, to) 기간에서 고른 API들의 시간별 기록(순위 옆 작은 추이선용).
     public List<EndpointHour> readEndpointHours(Instant from, Instant to, Collection<String> endpoints) {
         if (endpoints.isEmpty()) return List.of();

@@ -94,7 +94,8 @@ public class ApiDashboardService {
         return new ApiDashboardResponse(now, zone.getId(), store.mode(), databaseStatus(), servers, range.name(),
                 summary(period.total()), summary(previous), period.trend(), period.ranking(),
                 poolMonitor.snapshot(poolUnit(range),
-                        period.trend().stream().map(ApiDashboardResponse.TrendPoint::startAt).toList()));
+                        period.trend().stream().map(ApiDashboardResponse.TrendPoint::startAt).toList()),
+                ApiDomain.LABELS);
     }
 
     // DB 연결 풀 그래프 칸 길이: 요청 그래프와 같은 칸(1분·5분·1시간)
@@ -218,15 +219,17 @@ public class ApiDashboardService {
     private record HourlyTrend(MetricsBucket total, List<ApiDashboardResponse.TrendPoint> points) {
     }
 
-    // [from, to) 기간을 1시간 요약 한 칸씩 점으로.
+    // [from, to) 기간을 1시간 요약 한 칸씩 점으로. 영역별 나눔은 API별 시간 기록으로 셈.
     private HourlyTrend hourlyTrend(Instant from, Instant to) {
         Map<Instant, MetricsBucket> hours = hourlyRepository.readTotals(from);
+        Map<Instant, Map<String, Long>> endpointCounts = hourlyRepository.readEndpointCountsByHour(from, to);
         MetricsBucket total = new MetricsBucket();
         List<ApiDashboardResponse.TrendPoint> points = new ArrayList<>();
         for (Instant hour = from; hour.isBefore(to); hour = hour.plus(Duration.ofHours(1))) {
             MetricsBucket data = hours.getOrDefault(hour, new MetricsBucket());
             total.add(data);
-            points.add(point(hour, data, 60));
+            points.add(point(hour, data, 60,
+                    ApiDomain.split(data.getCount(), endpointCounts.getOrDefault(hour, Map.of()))));
         }
         return new HourlyTrend(total, points);
     }
@@ -265,13 +268,13 @@ public class ApiDashboardService {
                             cell.getClientErrors() + cell.getServerErrors(),
                             average(cell.getDurationSumMs(), cell.getCount()),
                             cell.getCount() == 0 ? 0 : coarse.p95Ms(), fineMinutes, latencyOf(cell), true,
-                            cell.getClientErrors(), cell.getServerErrors()));
+                            cell.getClientErrors(), cell.getServerErrors(), ApiDomain.split(cell)));
                     collect(series, cell, index, count);
                     total.add(cell);
                     continue;
                 }
                 MetricsBucket data = fineAt.apply(index) == null ? new MetricsBucket() : fineAt.apply(index);
-                points.add(point(start, data, fineMinutes));
+                points.add(point(start, data, fineMinutes, ApiDomain.split(data)));
                 collect(series, data, index, count);
                 total.add(data);
             }
@@ -376,10 +379,12 @@ public class ApiDashboardService {
     }
 
     // startBucket부터 시작하는 5분 구간 하나를 추이 한 점으로.
-    private static ApiDashboardResponse.TrendPoint point(Instant start, MetricsBucket data, int spanMinutes) {
+    private static ApiDashboardResponse.TrendPoint point(Instant start, MetricsBucket data, int spanMinutes,
+            List<Long> domainRequests) {
         return new ApiDashboardResponse.TrendPoint(start, data.getCount(),
                 data.getClientErrors() + data.getServerErrors(), average(data.getDurationSumMs(), data.getCount()),
-                data.p95Ms(), spanMinutes, latencyOf(data), false, data.getClientErrors(), data.getServerErrors());
+                data.p95Ms(), spanMinutes, latencyOf(data), false, data.getClientErrors(), data.getServerErrors(),
+                domainRequests);
     }
 
     private static ApiDashboardResponse.Summary summary(MetricsBucket bucket) {
