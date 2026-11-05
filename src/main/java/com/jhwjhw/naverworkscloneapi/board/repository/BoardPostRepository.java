@@ -63,6 +63,13 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             @Param("to") Instant to, @Param("fileOnly") boolean fileOnly, @Param("activity") boolean activity,
             Pageable pageable);
 
+    // 게시판 홈 카드: 등록순 최신 글 몇 개만. 쪽 번호가 없어 전체 건수(count)는 세지 않음(List 반환).
+    @Query("select p from BoardPost p join fetch p.board b join fetch b.company left join fetch p.author a "
+            + "left join fetch a.userAccount u where b.id in :boardIds and p.deletedAt is null " + PUBLISHED
+            + "and (:admin = true or b.type <> :hiddenType or a.id = :me) order by p.createdAt desc, p.id desc")
+    List<BoardPost> findLatest(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,
+            @Param("admin") boolean admin, @Param("hiddenType") BoardType hiddenType, Pageable pageable);
+
     // 검색 결과 탭의 건수(목록과 같은 조건, 글은 가져오지 않음)
     @Query("select count(p) from BoardPost p join p.board b left join p.author a left join a.userAccount u " + PAGE_WHERE)
     long countPage(@Param("boardIds") Collection<Long> boardIds, @Param("me") Long me,

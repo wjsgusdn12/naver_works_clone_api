@@ -424,11 +424,9 @@ public class BoardService {
     // 게시판 홈 한 영역: 최신 HOME_SIZE개(전체 개수는 필요 없어 세지 않음)
     private List<BoardPost> homeRows(Viewer viewer, List<Long> boardIds) {
         if (boardIds.isEmpty()) return List.of();
-        return postRepository.findPage(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY, false, false,
-                false, false, false, "", SearchScope.ALL.name(), SearchField.ALL.name(), FILTER_MIN, FILTER_MAX,
-                false, false,
-                org.springframework.data.domain.Pageable.ofSize(HOME_SIZE)
-                        .withPage(0)).getContent();
+        // 홈 카드엔 쪽 번호가 없어 전체 건수를 세지 않는 조회를 씀(카드마다 count 쿼리 하나씩 아낌)
+        return postRepository.findLatest(boardIds, viewer.id(), viewer.admin(), BoardType.INQUIRY,
+                org.springframework.data.domain.Pageable.ofSize(HOME_SIZE));
     }
 
     private BoardResponse.PostPage page(Viewer viewer, List<BoardResponse.PostSummary> pinned, Page<BoardPost> rows) {
