@@ -5,8 +5,8 @@ spring:
     activate:
       on-profile: local
   datasource:
-    url: jdbc:postgresql://aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require
-    username: postgres.gosyisfsladfldfvcaed
+    url: jdbc:postgresql://YOUR_SUPABASE_POOLER_HOST:5432/postgres?sslmode=require
+    username: "REPLACE_WITH_YOUR_SUPABASE_DB_USER"
     password: "REPLACE_WITH_YOUR_SUPABASE_DATABASE_PASSWORD"
 
 app:
