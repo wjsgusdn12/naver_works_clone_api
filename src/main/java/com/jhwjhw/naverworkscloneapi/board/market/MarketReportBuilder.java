@@ -222,6 +222,7 @@ public final class MarketReportBuilder {
         List<Mover> gainers = movers != null && basis.equals(movers.date()) ? filterMovers(movers.gainers()) : List.of();
         List<Mover> losers = movers != null && basis.equals(movers.date()) ? filterMovers(movers.losers()) : List.of();
         List<Mover> active = movers != null && basis.equals(movers.date()) ? filterMovers(movers.active()) : List.of();
+        List<Mover> dollar = movers != null && basis.equals(movers.date()) ? dollarLeaders(movers, changes) : List.of();
 
         // 📖 시장 이야기: 추세 → 빅테크 → 특징주 순서로 풀어 씀
         blocks.add(heading(3, "미국 시장 이야기"));
@@ -234,16 +235,16 @@ public final class MarketReportBuilder {
         if (!gainers.isEmpty() || !losers.isEmpty() || !active.isEmpty()) {
             List<String> parts = new ArrayList<>();
             if (!gainers.isEmpty()) {
-                parts.add("급등 1위는 " + gainers.getFirst().ticker() + "(" + pct(gainers.getFirst().changePercent()
+                parts.add("급등 1위는 " + storyName(gainers.getFirst()) + "(" + pct(gainers.getFirst().changePercent()
                         .doubleValue()) + ")");
             }
             if (!losers.isEmpty()) {
-                parts.add("급락 1위는 " + losers.getFirst().ticker() + "(" + pct(losers.getFirst().changePercent()
+                parts.add("급락 1위는 " + storyName(losers.getFirst()) + "(" + pct(losers.getFirst().changePercent()
                         .doubleValue()) + ")");
             }
             String text = String.join(", ", parts) + (parts.isEmpty() ? "" : "였습니다.");
             if (!active.isEmpty()) {
-                text += " 거래가 가장 많이 몰린 종목은 " + active.getFirst().ticker() + "(거래량 "
+                text += " 거래가 가장 많이 몰린 종목은 " + storyName(active.getFirst()) + "(거래량 "
                         + compact(active.getFirst().volume()) + ", " + pct(active.getFirst().changePercent().doubleValue())
                         + ")입니다.";
             }
@@ -257,14 +258,15 @@ public final class MarketReportBuilder {
             blocks.add(paragraph(text(bigTechSummary(tech, changes))));
         }
 
-        // 한국처럼 순위 3칸: 상승률 · 하락률 · 거래량
-        if (!gainers.isEmpty() || !losers.isEmpty() || !active.isEmpty()) {
+        // 한국과 같은 순위 4칸: 상승률 · 하락률 · 거래량 · 거래대금
+        if (!gainers.isEmpty() || !losers.isEmpty() || !active.isEmpty() || !dollar.isEmpty()) {
             List<Map<String, Object>> groups = new ArrayList<>();
             if (!gainers.isEmpty()) groups.add(rankGroup("상승률 상위", "up", gainers.stream().map(MarketReportBuilder::moverRow).toList()));
             if (!losers.isEmpty()) groups.add(rankGroup("하락률 상위", "down", losers.stream().map(MarketReportBuilder::moverRow).toList()));
             if (!active.isEmpty()) groups.add(rankGroup("거래량 상위", "info", active.stream().map(MarketReportBuilder::moverRow).toList()));
+            if (!dollar.isEmpty()) groups.add(rankGroup("거래대금 상위", "info", dollar.stream().map(MarketReportBuilder::dollarRow).toList()));
             blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
-            blocks.add(paragraph(tone("순위는 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다.", "muted")));
+            blocks.add(paragraph(tone("순위는 주가 $5 이상, 거래량 100만 주 이상 종목만 모았습니다. 거래대금은 거래량 상위 100개·급등락·빅테크 종목 중에서 계산했습니다.", "muted")));
         }
 
         blocks.add(heading(3, "오늘 한국장 체크포인트"));
@@ -391,10 +393,53 @@ public final class MarketReportBuilder {
                 .filter(mover -> mover.volume() >= US_MIN_VOLUME).limit(5).toList();
     }
 
+    // 거래대금(주가 × 거래량) 상위. 후보: 받아 온 급등·급락·거래량 목록 + 빅테크(그날 종가·거래량이 있으면).
+    // 순위 목록에 없는 종목은 빠질 수 있는 근사치.
+    private static List<Mover> dollarLeaders(Movers movers, Map<String, Change> changes) {
+        Map<String, Mover> candidates = new LinkedHashMap<>();
+        for (List<Mover> list : List.of(movers.active(), movers.gainers(), movers.losers())) {
+            for (Mover mover : list) candidates.putIfAbsent(mover.ticker(), mover);
+        }
+        US_BIG_TECH.forEach((symbol, label) -> {
+            Change change = changes.get(symbol);
+            if (change != null && change.volume() > 0) {
+                candidates.putIfAbsent(symbol, new Mover(symbol, null, change.close(), change.rate(), change.volume()));
+            }
+        });
+        return candidates.values().stream().filter(mover -> mover.price().compareTo(US_MIN_PRICE) >= 0)
+                .filter(mover -> mover.volume() >= US_MIN_VOLUME)
+                .sorted(Comparator.comparing(MarketReportBuilder::dollarVolume).reversed()).limit(5).toList();
+    }
+
+    private static BigDecimal dollarVolume(Mover mover) {
+        return mover.price().multiply(BigDecimal.valueOf(mover.volume()));
+    }
+
+    // 회사 이름: 한글 이름표에 있으면 한글, 없으면 받아 온 영문 이름(없으면 null)
+    private static String companyName(Mover mover) {
+        String korean = UsStockNames.korean(mover.ticker());
+        return korean != null ? korean : mover.name();
+    }
+
+    // 문장 속 이름: 한글 이름이 있으면 "엔비디아(NVDA)", 없으면 기호만
+    private static String storyName(Mover mover) {
+        String korean = UsStockNames.korean(mover.ticker());
+        return korean != null ? korean + "(" + mover.ticker() + ")" : mover.ticker();
+    }
+
     private static Map<String, Object> moverRow(Mover mover) {
         // 이름 칸은 종목 기호, 그 옆 작은 글자는 회사 이름(있으면) · 거래량
-        String sub = (mover.name() != null ? mover.name() + " · " : "") + "거래량 " + compact(mover.volume());
+        String name = companyName(mover);
+        String sub = (name != null ? name + " · " : "") + "거래량 " + compact(mover.volume());
         return rankRow(mover.ticker(), usd(mover.price()), mover.changePercent(), sub);
+    }
+
+    // 거래대금 칸: 값은 거래대금, 작은 글자는 회사 이름 · 주가
+    private static Map<String, Object> dollarRow(Mover mover) {
+        String name = companyName(mover);
+        String sub = (name != null ? name + " · " : "") + usd(mover.price());
+        long dollars = dollarVolume(mover).setScale(0, RoundingMode.HALF_UP).longValue();
+        return rankRow(mover.ticker(), "$" + compact(dollars), mover.changePercent(), sub);
     }
 
     // ───────────── 한국 ─────────────
@@ -449,18 +494,24 @@ public final class MarketReportBuilder {
                     .sorted(Comparator.comparing(StockQuote::rate).reversed()).limit(5).toList();
             List<StockQuote> losers = liquid.stream().filter(stock -> stock.rate().signum() < 0)
                     .sorted(Comparator.comparing(StockQuote::rate)).limit(5).toList();
+            List<StockQuote> traded = liquid.stream().filter(stock -> stock.volume() > 0)
+                    .sorted(Comparator.comparingLong(StockQuote::volume).reversed()).limit(5).toList();
             List<StockQuote> busiest = liquid.stream()
                     .sorted(Comparator.comparing(StockQuote::tradeValue).reversed()).limit(5).toList();
+            // 순위 4칸: 상승률 · 하락률 · 거래량 · 거래대금(미국과 같은 순서)
             List<Map<String, Object>> groups = new ArrayList<>();
             if (!gainers.isEmpty()) groups.add(rankGroup("상승률 상위", "up", gainers.stream().map(stock ->
                     rankRow(stock.name(), price(stock.close()), stock.rate(), marketName(stock))).toList()));
             if (!losers.isEmpty()) groups.add(rankGroup("하락률 상위", "down", losers.stream().map(stock ->
                     rankRow(stock.name(), price(stock.close()), stock.rate(), marketName(stock))).toList()));
+            if (!traded.isEmpty()) groups.add(rankGroup("거래량 상위", "info", traded.stream().map(stock ->
+                    rankRow(stock.name(), shares(stock.volume()), stock.rate(), marketName(stock) + " · "
+                            + price(stock.close()))).toList()));
             if (!busiest.isEmpty()) groups.add(rankGroup("거래대금 상위", "info", busiest.stream().map(stock ->
                     rankRow(stock.name(), won(stock.tradeValue()), stock.rate(), marketName(stock))).toList()));
             if (!groups.isEmpty()) {
                 blocks.add(Map.of("type", "marketRanks", "attrs", Map.of("groups", groups)));
-                blocks.add(paragraph(tone("상승률·하락률·거래대금 순위는 거래대금 10억 원 이상 종목만 모았습니다.", "muted")));
+                blocks.add(paragraph(tone("순위는 거래대금 10억 원 이상 종목만 모았습니다.", "muted")));
             }
         }
         blocks.add(heading(3, "다음 거래일 체크포인트"));
@@ -651,6 +702,13 @@ public final class MarketReportBuilder {
         if (value >= 1_000_000L) return String.format(Locale.ROOT, "%.1fM", value / 1e6);
         if (value >= 1_000L) return String.format(Locale.ROOT, "%.1fK", value / 1e3);
         return String.valueOf(value);
+    }
+
+    // 주식 수 → "1.2억주" / "1,500만주" / "9,000주"
+    static String shares(long value) {
+        if (value >= 100_000_000L) return String.format(Locale.ROOT, "%.1f억주", value / 1e8);
+        if (value >= 10_000L) return new DecimalFormat("#,##0").format(value / 10_000) + "만주";
+        return new DecimalFormat("#,##0").format(value) + "주";
     }
 
     // 원 단위 금액 → "1조 2,345억원" / "345억원"

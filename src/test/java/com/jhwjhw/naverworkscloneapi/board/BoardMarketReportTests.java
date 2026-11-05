@@ -119,6 +119,9 @@ class BoardMarketReportTests {
                 .contains("가상경제신문").contains("가상 반도체 수출이 한 달 만에 사상 최대를 기록했다.")
                 .doesNotContain("홍길동 기자").contains("가상 국무회의 열려")
                 .contains("가상 대통령은 오늘 \"가상 시장이 안정되고 있다\"고 말했습니다.").doesNotContain("발언하고 있다").contains("가상 원화 약세 이어져").contains("가상일보").doesNotContain("[포토]").doesNotContain("- 가상경제신문 ");
+        // 순위 4칸: 거래대금은 후보(급등락 + 빅테크) 중 주가×거래량 순. 빅테크는 한글 이름으로 나옴.
+        assertThat(post.getContentText()).contains("상승률 상위").contains("하락률 상위").contains("거래대금 상위")
+                .contains("마이크로소프트 · $396.00").contains("$4.9B");
         assertThat(morning.getNewsDoneAt()).isNotNull();
         assertThat(post.getContentJson()).contains("\"type\":\"marketNews\"").contains("https://example.com/news/1")
                 .doesNotContain("\"format\"").contains("\"type\":\"marketHero\"").contains("\"type\":\"marketStats\"")
@@ -142,11 +145,20 @@ class BoardMarketReportTests {
         assertThat(post.getContentText()).contains("한국 시장 이야기").contains("시장 체감").contains("돈의 흐름")
                 .contains("1위 가상전자").contains("상한가 1개 (가상소형 등)").contains("다음 거래일 체크포인트")
                 .contains("오늘 밤 미국장").doesNotContain("52주 최저");
+        // 한국 순위 4칸: 거래량 상위가 거래대금 상위 앞에 붙음
+        assertThat(post.getContentText()).contains("거래량 상위").contains("1,500만주").contains("90만주");
         // 거래대금 10억 원 미만 종목은 상승률 순위 카드에서 빠짐(상한가 이야기에는 나옴)
         assertThat(post.getContentText()).doesNotContain("가상소형 1,200원");
         assertThat(post.getUpdatedAt()).isNotNull();
         // 한국: 코스피 추이 1 + 지수 2 + 코스닥 추이 1 + 종목 1
         assertThat(calls.get() - before).isEqualTo(5);
+    }
+
+    @Test
+    void usStockKoreanNames() {
+        assertThat(com.jhwjhw.naverworkscloneapi.board.market.UsStockNames.korean("NVDA")).isEqualTo("엔비디아");
+        assertThat(com.jhwjhw.naverworkscloneapi.board.market.UsStockNames.korean("kd")).isEqualTo("킨드릴");
+        assertThat(com.jhwjhw.naverworkscloneapi.board.market.UsStockNames.korean("NOPE")).isNull();
     }
 
     @Test

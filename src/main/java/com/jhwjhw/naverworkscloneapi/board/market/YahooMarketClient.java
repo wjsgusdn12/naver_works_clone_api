@@ -71,13 +71,14 @@ public class YahooMarketClient {
         return unique;
     }
 
-    static final String SCREENER = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=25&scrIds=";
+    static final String SCREENER = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=%d&scrIds=%s";
 
     // 급등·급락·거래 많은 종목(Yahoo 미리 정한 스크리너). 날짜는 시세 시각(뉴욕)의 날짜 — 장 마감 뒤에는 그날 것.
+    // 거래대금 순위 목록은 없어서, 거래량 상위를 넉넉히(100개) 받아 주가×거래량으로 다시 줄 세우는 후보로 씀.
     public UsMarketClient.Movers movers() throws IOException {
-        List<UsMarketClient.Mover> gainers = screener("day_gainers");
-        List<UsMarketClient.Mover> losers = screener("day_losers");
-        List<UsMarketClient.Mover> active = screener("most_actives");
+        List<UsMarketClient.Mover> gainers = screener("day_gainers", 25);
+        List<UsMarketClient.Mover> losers = screener("day_losers", 25);
+        List<UsMarketClient.Mover> active = screener("most_actives", 100);
         LocalDate date = lastDate;
         if (date == null) throw new IOException("Yahoo screener has no market time.");
         return new UsMarketClient.Movers(date, gainers, losers, active);
@@ -86,8 +87,8 @@ public class YahooMarketClient {
     // 마지막으로 읽은 스크리너의 시세 날짜(세 목록이 같은 날 것)
     private LocalDate lastDate;
 
-    private List<UsMarketClient.Mover> screener(String id) throws IOException {
-        String body = http.get(URI.create(SCREENER + id));
+    private List<UsMarketClient.Mover> screener(String id, int count) throws IOException {
+        String body = http.get(URI.create(SCREENER.formatted(count, id)));
         Map<?, ?> root;
         try {
             root = objectMapper.readValue(body, Map.class);
