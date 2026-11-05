@@ -37,6 +37,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -71,6 +72,7 @@ public class BoardService {
     static final List<BoardType> COMMON_TYPES = List.of(BoardType.NOTICE, BoardType.FREE, BoardType.INQUIRY);
     static final Duration TRASH_KEEP = Duration.ofDays(30);
     static final int MAX_ATTACHMENTS = 30;
+    static final int MAX_COMMENT_ATTACHMENTS = 5;
     static final int UPLOADS_PER_MINUTE = 30;
     private static final int PREVIEW_LENGTH = 120;
 
@@ -529,7 +531,7 @@ public class BoardService {
         Long postId = post.getId();
         boolean author = isAuthor(viewer, post);
         List<BoardResponse.Comment> comments = comments(viewer, post);
-        List<BoardResponse.Attachment> attachments = attachmentRepository.findByPostIdOrderById(postId).stream()
+        List<BoardResponse.Attachment> attachments = attachmentRepository.findByPostIdAndCommentIsNullOrderById(postId).stream()
                 .map(BoardService::attachment).toList();
         boolean favorite = favoriteRepository.findByMembershipIdAndBoardId(viewer.id(), post.getBoard().getId())
                 .isPresent();
@@ -556,17 +558,26 @@ public class BoardService {
         Set<Long> deletedParents = visible.stream().filter(comment -> comment.getParent() != null)
                 .map(comment -> comment.getParent().getId()).filter(id -> !visibleIds.contains(id))
                 .collect(Collectors.toSet());
+        // 댓글 첨부는 쿼리 한 번으로 모아 댓글별로 나눔
+        Map<Long, List<BoardResponse.Attachment>> filesByComment = visibleIds.isEmpty() ? Map.of()
+                : attachmentRepository.findByCommentIdInOrderById(visibleIds).stream()
+                        .collect(Collectors.groupingBy(file -> file.getComment().getId(), LinkedHashMap::new,
+                                Collectors.mapping(BoardService::attachment, Collectors.toList())));
         List<BoardResponse.Comment> result = new ArrayList<>(visible.stream()
-                .map(comment -> new BoardResponse.Comment(comment.getId(),
-                        comment.getParent() == null ? null : comment.getParent().getId(), comment.getAuthor().getId(),
-                        comment.getAuthor().getUserAccount().getDisplayName(),
-                        comment.getAuthor().effectiveRole() == Role.ADMIN, comment.getContent(), comment.getCreatedAt(),
-                        !post.isDeleted() && (viewer.admin() || comment.getAuthor().getId().equals(viewer.id())),
-                        false))
+                .map(comment -> {
+                    boolean mine = comment.getAuthor().getId().equals(viewer.id());
+                    return new BoardResponse.Comment(comment.getId(),
+                            comment.getParent() == null ? null : comment.getParent().getId(), comment.getAuthor().getId(),
+                            comment.getAuthor().getUserAccount().getDisplayName(),
+                            comment.getAuthor().effectiveRole() == Role.ADMIN, comment.getContent(),
+                            comment.getCreatedAt(), !post.isDeleted() && (viewer.admin() || mine), false,
+                            !post.isDeleted() && mine, comment.getEditedAt(),
+                            filesByComment.getOrDefault(comment.getId(), List.of()));
+                })
                 .toList());
         for (BoardComment parent : commentRepository.findAllById(deletedParents)) {
             result.add(new BoardResponse.Comment(parent.getId(), null, null, null, false, "", parent.getCreatedAt(),
-                    false, true));
+                    false, true, false, null, List.of()));
         }
         result.sort(Comparator.comparing(BoardResponse.Comment::id));
         return result;
@@ -789,8 +800,11 @@ public class BoardService {
         if (post.isDeleted()) {
             throw new BoardException("BOARD_POST_ALREADY_DELETED", "휴지통에 있는 글에는 댓글을 달 수 없습니다.");
         }
-        String text = request.content().strip();
-        if (text.isEmpty()) throw new BoardException("BOARD_COMMENT_EMPTY", "댓글을 입력해 주세요.");
+        String text = request.content() == null ? "" : request.content().strip();
+        List<Long> fileIds = request.attachmentIds() == null ? List.of() : request.attachmentIds();
+        if (text.isEmpty() && fileIds.isEmpty()) {
+            throw new BoardException("BOARD_COMMENT_EMPTY", "댓글을 입력하거나 파일을 첨부해 주세요.");
+        }
         // 답글: 같은 글의 지우지 않은 댓글에만. 답글에 답하면 그 맨 위 댓글 아래로(한 단계만).
         BoardComment target = null;
         if (request.parentId() != null) {
@@ -799,13 +813,57 @@ public class BoardService {
                     .orElseThrow(() -> new BoardException("BOARD_COMMENT_NOT_FOUND", "답글을 달 댓글을 찾을 수 없습니다."));
         }
         BoardComment root = target == null ? null : target.getParent() == null ? target : target.getParent();
-        commentRepository.save(new BoardComment(post, viewer.me(), text, root));
+        BoardComment saved = commentRepository.save(new BoardComment(post, viewer.me(), text, root));
+        attachToComment(viewer, saved, fileIds);
         boolean answer = post.getBoard().getType() == BoardType.INQUIRY && viewer.admin();
         postRepository.changeCommentCount(postId, 1);
         postRepository.touchActivity(postId, Instant.now());
         if (answer) postRepository.markAnswered(postId, Instant.now());
-        notifyComment(viewer, post, text, answer, target);
+        notifyComment(viewer, post, text.isEmpty() ? "파일을 첨부했습니다." : text, answer, target);
         return detail(membershipId, postId);
+    }
+
+    // 댓글 수정: 쓴 사람만, 휴지통 글이 아닐 때. 내용과 첨부 전체를 새 값으로 바꿈(둘 다 비우면 거절).
+    @Transactional
+    public BoardResponse.PostDetail updateComment(Long membershipId, Long commentId, BoardRequest.CommentUpdate request) {
+        Viewer viewer = viewer(membershipId);
+        BoardComment comment = commentRepository.findById(commentId)
+                .filter(found -> found.getDeletedAt() == null)
+                .orElseThrow(() -> new BoardException("BOARD_COMMENT_NOT_FOUND", "댓글을 찾을 수 없습니다."));
+        Long postId = comment.getPost().getId();
+        BoardPost post = readablePost(viewer, postId);
+        if (post.isDeleted() || !comment.getAuthor().getId().equals(viewer.id())) {
+            throw new BoardException("BOARD_COMMENT_AUTHOR_REQUIRED", "댓글 쓴 사람만 고칠 수 있습니다.");
+        }
+        String text = request.content() == null ? "" : request.content().strip();
+        List<Long> fileIds = request.attachmentIds() == null ? List.of() : request.attachmentIds();
+        if (text.isEmpty() && fileIds.isEmpty()) {
+            throw new BoardException("BOARD_COMMENT_EMPTY", "댓글을 입력하거나 파일을 첨부해 주세요.");
+        }
+        comment.edit(text, Instant.now());
+        attachToComment(viewer, comment, fileIds);
+        return detail(membershipId, postId);
+    }
+
+    // 댓글 첨부 정리: 내가 올렸고 아직 아무 데도 안 붙었거나 이 댓글에 붙은 것만. 빠진 기존 첨부는 떼어 냄(파일은 청소 작업이 정리).
+    private void attachToComment(Viewer viewer, BoardComment comment, List<Long> fileIds) {
+        Set<Long> wanted = new LinkedHashSet<>(fileIds.stream().filter(Objects::nonNull).toList());
+        if (wanted.size() > MAX_COMMENT_ATTACHMENTS) {
+            throw new BoardException("BOARD_ATTACHMENT_TOO_MANY", "댓글 첨부는 " + MAX_COMMENT_ATTACHMENTS + "개까지입니다.");
+        }
+        Map<Long, BoardAttachment> found = attachmentRepository.findAllById(wanted).stream()
+                .collect(Collectors.toMap(BoardAttachment::getId, Function.identity()));
+        for (Long id : wanted) {
+            BoardAttachment attachment = found.get(id);
+            boolean usable = attachment != null && attachment.getUploader().getId().equals(viewer.id())
+                    && (attachment.getPost() == null
+                            || (attachment.getComment() != null && attachment.getComment().getId().equals(comment.getId())));
+            if (!usable) throw new BoardException("BOARD_ATTACHMENT_INVALID", "첨부 파일을 다시 올려 주세요.");
+        }
+        for (BoardAttachment old : attachmentRepository.findByCommentIdOrderById(comment.getId())) {
+            if (!wanted.contains(old.getId())) old.attachToComment(null);
+        }
+        for (Long id : wanted) found.get(id).attachToComment(comment);
     }
 
     // 댓글 허용·알림. 값이 없으면 켬, 문의하기는 답변이 댓글이라 항상 켬.
@@ -918,6 +976,8 @@ public class BoardService {
             throw new BoardException("BOARD_COMMENT_AUTHOR_REQUIRED", "댓글 쓴 사람이나 관리자만 지울 수 있습니다.");
         }
         comment.delete(Instant.now());
+        // 지운 댓글의 첨부는 떼어 내 아무도 못 받게 하고, 파일은 청소 작업이 정리
+        attachmentRepository.findByCommentIdOrderById(commentId).forEach(file -> file.attachToComment(null));
         postRepository.changeCommentCount(postId, -1);
         return detail(membershipId, postId);
     }
@@ -978,6 +1038,7 @@ public class BoardService {
         for (Long id : wanted) {
             BoardAttachment attachment = found.get(id);
             boolean usable = attachment != null && attachment.getUploader().getId().equals(viewer.id())
+                    && attachment.getComment() == null
                     && (attachment.getPost() == null || attachment.getPost().getId().equals(post.getId()));
             if (!usable) {
                 throw new BoardException("BOARD_ATTACHMENT_INVALID", "첨부 파일을 다시 올려 주세요.");
@@ -987,7 +1048,7 @@ public class BoardService {
             }
         }
         if (post.getId() != null) {
-            for (BoardAttachment old : attachmentRepository.findByPostIdOrderById(post.getId())) {
+            for (BoardAttachment old : attachmentRepository.findByPostIdAndCommentIsNullOrderById(post.getId())) {
                 if (!wanted.contains(old.getId())) old.attachTo(null, false);
             }
         }

@@ -169,6 +169,14 @@ public class BoardController {
                 service.react(id(jwt), postId, request.emoji()));
     }
 
+    // 댓글 수정(쓴 사람만). 내용과 남길 첨부 전체를 보냄.
+    @PostMapping("/comment/update/{commentId}")
+    public ApiResponse<BoardResponse.PostDetail> updateComment(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long commentId, @Valid @RequestBody BoardRequest.CommentUpdate request) {
+        return ApiResponse.success("BOARD_COMMENT_UPDATED", "댓글을 수정했습니다.",
+                service.updateComment(id(jwt), commentId, request));
+    }
+
     @PostMapping("/comment/delete/{commentId}")
     public ApiResponse<BoardResponse.PostDetail> deleteComment(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long commentId) {

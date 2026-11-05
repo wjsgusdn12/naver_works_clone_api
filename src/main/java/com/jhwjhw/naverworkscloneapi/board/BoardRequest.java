@@ -51,11 +51,20 @@ public final class BoardRequest {
         }
     }
 
-    // parentId: 답글이면 답할 댓글(답글에 답하면 같은 맨 위 댓글 아래로 붙음)
-    public record CommentCreate(@NotBlank @Size(max = 1000) String content, Long parentId) {
+    // parentId: 답글이면 답할 댓글(답글에 답하면 같은 맨 위 댓글 아래로 붙음).
+    // attachmentIds: 미리 올린 첨부(/attachment/upload). 첨부가 있으면 내용은 비워도 됨(둘 다 없으면 서버가 거절).
+    public record CommentCreate(@Size(max = 1000) String content, Long parentId, @Size(max = 5) List<Long> attachmentIds) {
         public CommentCreate(String content) {
-            this(content, null);
+            this(content, null, null);
         }
+
+        public CommentCreate(String content, Long parentId) {
+            this(content, parentId, null);
+        }
+    }
+
+    // 댓글 수정: 내용과 남길 첨부 전체(빠진 기존 첨부는 떼어 냄, 새로 올린 것은 붙임)
+    public record CommentUpdate(@Size(max = 1000) String content, @Size(max = 5) List<Long> attachmentIds) {
     }
 
     // 글 리액션. 같은 이모지를 다시 누르면 취소, 다른 이모지면 바꿈.

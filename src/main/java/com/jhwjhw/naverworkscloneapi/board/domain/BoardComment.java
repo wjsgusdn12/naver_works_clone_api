@@ -32,6 +32,9 @@ public class BoardComment {
 
     private Instant deletedAt;
 
+    // 마지막으로 고친 시각(고친 적 없으면 null)
+    private Instant editedAt;
+
     @Column(nullable = false)
     private Instant createdAt;
 
@@ -48,6 +51,11 @@ public class BoardComment {
         this.content = content;
         this.parent = parent;
         this.createdAt = Instant.now();
+    }
+
+    public void edit(String content, Instant at) {
+        this.content = content;
+        this.editedAt = at;
     }
 
     public void delete(Instant at) {

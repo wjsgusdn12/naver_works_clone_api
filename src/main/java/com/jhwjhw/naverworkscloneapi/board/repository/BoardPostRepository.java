@@ -25,12 +25,12 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
             + "or (:field <> 'TITLE' and lower(p.contentText) like :keyword escape '\\'))) "
             + "or ((:scope = 'ALL' or :scope = 'AUTHOR') and lower(u.displayName) like :keyword escape '\\') "
             + "or (:scope = 'FILE' and exists (select f.id from BoardAttachment f where f.post = p "
-            + "and f.inlineImage = false and lower(f.originalName) like :keyword escape '\\')) "
+            + "and f.inlineImage = false and f.comment is null and lower(f.originalName) like :keyword escape '\\')) "
             + "or (:scope = 'COMMENT' and exists (select c.id from BoardComment c where c.post = p "
             + "and c.deletedAt is null and lower(c.content) like :keyword escape '\\'))) "
             + "and p.createdAt >= :from and p.createdAt < :to "
             + "and (:fileOnly = false or exists (select f2.id from BoardAttachment f2 where f2.post = p "
-            + "and f2.inlineImage = false)) ";
+            + "and f2.inlineImage = false and f2.comment is null)) ";
 
     // 목록·검색은 등록된 글만(임시저장·예약 글은 쓴 사람의 임시저장함·예약함에서만)
     String PUBLISHED = "and p.status = com.jhwjhw.naverworkscloneapi.board.domain.PostStatus.PUBLISHED ";
