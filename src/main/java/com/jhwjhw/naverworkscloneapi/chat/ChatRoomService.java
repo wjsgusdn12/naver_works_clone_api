@@ -98,6 +98,8 @@ public class ChatRoomService {
             if (targetMember != null) {
                 candidate.rejoin();
                 targetMember.rejoin();
+                // 상대가 예전에 나갔던 방이면 상대 목록에도 다시 나타나야 함(이미 있으면 다시 조회할 뿐)
+                eventPublisher.publishEvent(ChatRoomChangedEvent.joined(room.getId(), Set.of(targetId)));
                 return room(room, requesterId);
             }
         }
@@ -105,6 +107,8 @@ public class ChatRoomService {
         ChatRoom room = roomRepository.save(new ChatRoom(requester.getCompany(), ChatRoomType.DIRECT, null, null));
         memberRepository.save(new ChatRoomMember(room, requester));
         memberRepository.save(new ChatRoomMember(room, target));
+        // 상대는 이 방을 아직 구독하지 않아, 알리지 않으면 첫 메시지가 실시간으로 안 감
+        eventPublisher.publishEvent(ChatRoomChangedEvent.joined(room.getId(), Set.of(targetId)));
         log.info("Direct chat room created. roomId={}, requesterId={}, targetId={}", room.getId(), requesterId,
                 targetId);
         return room(room, requesterId);
@@ -142,6 +146,9 @@ public class ChatRoomService {
             memberRepository.save(new ChatRoomMember(room, activeMembership(memberId)));
         }
         systemMessage(room, requester, requester.getUserAccount().getDisplayName() + "님이 그룹 채팅방을 만들었습니다.");
+        Set<Long> invited = new HashSet<>(memberIds);
+        invited.remove(requesterId);
+        eventPublisher.publishEvent(ChatRoomChangedEvent.joined(room.getId(), invited));
         log.info("Group chat room created. roomId={}, ownerId={}, memberCount={}", room.getId(), requesterId,
                 memberIds.size());
         return room(room, requesterId);
@@ -373,6 +380,7 @@ public class ChatRoomService {
         }
         systemMessage(room, requester, requester.getUserAccount().getDisplayName() + "님이 "
                 + target.getUserAccount().getDisplayName() + "님을 초대했습니다.");
+        eventPublisher.publishEvent(ChatRoomChangedEvent.joined(roomId, Set.of(targetId)));
     }
 
     @Transactional
@@ -387,6 +395,7 @@ public class ChatRoomService {
         systemMessage(room, requester, requester.getUserAccount().getDisplayName() + "님이 "
                 + target.getMembership().getUserAccount().getDisplayName() + "님을 내보냈습니다.");
         endWhenEmpty(room);
+        eventPublisher.publishEvent(ChatRoomChangedEvent.removed(roomId, targetId));
     }
 
     @Transactional
@@ -403,6 +412,8 @@ public class ChatRoomService {
                     mine.getMembership().getUserAccount().getDisplayName() + "님이 채팅방을 나갔습니다.");
         }
         endWhenEmpty(room);
+        // 내 다른 탭·기기에서도 방이 사라지고 구독이 끊기도록
+        eventPublisher.publishEvent(ChatRoomChangedEvent.removed(roomId, requesterId));
     }
 
     // 회사를 옮길 때 이전 회사의 모든 방에서 나감. 방장인 그룹방은 가장 먼저 들어온 다른 구성원에게 방장을 넘김.
@@ -429,6 +440,7 @@ public class ChatRoomService {
                         mine.getMembership().getUserAccount().getDisplayName() + "님이 채팅방을 나갔습니다.");
             }
             endWhenEmpty(room);
+            eventPublisher.publishEvent(ChatRoomChangedEvent.removed(room.getId(), membershipId));
         }
         log.info("Left all rooms for company move. membershipId={}", membershipId);
     }
@@ -466,6 +478,7 @@ public class ChatRoomService {
         Membership requester = activeMembership(requesterId);
         systemMessage(room, requester, requester.getUserAccount().getDisplayName() + "님이 방장을 "
                 + target.getMembership().getUserAccount().getDisplayName() + "님에게 위임했습니다.");
+        eventPublisher.publishEvent(ChatRoomChangedEvent.updated(roomId));
     }
 
     @Transactional
@@ -474,6 +487,7 @@ public class ChatRoomService {
         room.rename(request.name().trim());
         Membership requester = activeMembership(requesterId);
         systemMessage(room, requester, requester.getUserAccount().getDisplayName() + "님이 그룹명을 변경했습니다.");
+        eventPublisher.publishEvent(ChatRoomChangedEvent.updated(roomId));
     }
 
     @Transactional

@@ -27,8 +27,8 @@ public class StompJwtChannelInterceptor implements ChannelInterceptor {
     private static final String BEARER_PREFIX = "Bearer ";
     private static final Pattern CHAT_ROOM_TOPIC = Pattern.compile("^/topic/chatRoom/(\\d+)$");
     private static final Pattern PRESENCE_TOPIC = Pattern.compile("^/topic/(presence|profileImage)$");
-    // 입력 상태와 서비스 알림은 각자 자기 전용 큐만 구독할 수 있음.
-    private static final Pattern USER_TYPING_QUEUE = Pattern.compile("^/user/queue/(chatTyping|notification)$");
+    // 입력 상태·서비스 알림·방 초대/내보냄 알림은 각자 자기 전용 큐만 구독할 수 있음.
+    private static final Pattern USER_TYPING_QUEUE = Pattern.compile("^/user/queue/(chatTyping|notification|chatRoom)$");
     private static final Pattern CHAT_ROOM_TYPING = Pattern.compile("^/app/chatRoom/(\\d+)/typing$");
 
     private final JwtDecoder jwtDecoder;
