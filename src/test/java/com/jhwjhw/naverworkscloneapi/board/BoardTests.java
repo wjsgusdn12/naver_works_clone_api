@@ -526,6 +526,62 @@ class BoardTests {
         assertThat(new BoardService.ListOptions(15, null, false).size()).isEqualTo(BoardService.PAGE_SIZE);
     }
 
+    // 댓글 첨부·수정: 파일만 있는 댓글도 가능, 글 첨부 목록·클립 표시에는 안 섞임, 수정은 쓴 사람만(내용·첨부 교체),
+    // 남의 첨부는 못 붙이고, 댓글을 지우면 첨부는 떼어져 내려받기 불가.
+    @Test
+    void commentAttachmentsAndEditing() {
+        Long free = board(me, BoardType.FREE, company.getName()).id();
+        var post = write(me, free, "댓글 첨부 받을 글");
+        var first = service.upload(colleague.getId(),
+                new MockMultipartFile("file", "회의록.txt", "text/plain", "가상".getBytes()));
+        var second = service.upload(colleague.getId(),
+                new MockMultipartFile("file", "보충.txt", "text/plain", "가상".getBytes()));
+
+        var withFile = service.addComment(colleague.getId(), post.id(),
+                new BoardRequest.CommentCreate("", null, List.of(first.id())));
+        var comment = withFile.comments().getFirst();
+        assertThat(comment.content()).isEmpty();
+        assertThat(comment.attachments()).extracting(BoardResponse.Attachment::name).containsExactly("회의록.txt");
+        assertThat(comment.canEdit()).isTrue();
+        assertThat(comment.editedAt()).isNull();
+        // 글 첨부·목록 클립에는 안 섞임
+        assertThat(withFile.attachments()).isEmpty();
+        assertThat(service.list(me.getId(), BoardService.View.BOARD, free, 0).items()).filteredOn(row ->
+                row.id().equals(post.id())).singleElement().extracting(BoardResponse.PostSummary::hasFile)
+                .isEqualTo(false);
+        // 글을 볼 수 있는 사람은 댓글 첨부를 받을 수 있음
+        assertThat(service.attachmentFile(developer.getId(), first.id(), false).attachment().getOriginalName())
+                .isEqualTo("회의록.txt");
+
+        // 쓴 사람이 아니면(관리자 포함) 못 고침, 글에 쓸 첨부로 가져가기도 불가
+        assertThatThrownBy(() -> service.updateComment(admin.getId(), comment.id(),
+                new BoardRequest.CommentUpdate("x", List.of())))
+                .isInstanceOf(BoardException.class).hasMessage("댓글 쓴 사람만 고칠 수 있습니다.");
+        assertThatThrownBy(() -> service.addComment(me.getId(), post.id(),
+                new BoardRequest.CommentCreate("남의 첨부", null, List.of(second.id()))))
+                .isInstanceOf(BoardException.class).hasMessage("첨부 파일을 다시 올려 주세요.");
+        // 내용도 첨부도 없으면 거절
+        assertThatThrownBy(() -> service.addComment(me.getId(), post.id(),
+                new BoardRequest.CommentCreate(" ", null, List.of())))
+                .isInstanceOf(BoardException.class);
+
+        // 수정: 내용을 바꾸고 첨부를 교체(뺀 첨부는 떼어짐)
+        var edited = service.updateComment(colleague.getId(), comment.id(),
+                new BoardRequest.CommentUpdate("고친 댓글", List.of(second.id())));
+        assertThat(edited.comments().getFirst()).satisfies(item -> {
+            assertThat(item.content()).isEqualTo("고친 댓글");
+            assertThat(item.editedAt()).isNotNull();
+            assertThat(item.attachments()).extracting(BoardResponse.Attachment::name).containsExactly("보충.txt");
+        });
+        assertThatThrownBy(() -> service.attachmentFile(developer.getId(), first.id(), false))
+                .isInstanceOf(BoardException.class);
+
+        // 지우면 첨부도 떼어져 다른 사람은 못 받음
+        service.deleteComment(colleague.getId(), comment.id());
+        assertThatThrownBy(() -> service.attachmentFile(developer.getId(), second.id(), false))
+                .isInstanceOf(BoardException.class);
+    }
+
     // 검색 결과 탭: 게시글(제목·본문)·작성자·파일 이름·댓글을 따로 찾고, 탭별 건수와 맞은 파일·댓글 글자를 줌.
     @Test
     void searchScopesSeparatePostsAuthorsFilesAndComments() {
