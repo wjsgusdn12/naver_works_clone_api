@@ -155,6 +155,32 @@ class BoardMarketReportTests {
     }
 
     @Test
+    void oldFormatIsRebuiltOnlyForToday() throws Exception {
+        LocalDate yesterday = LocalDate.of(2026, 11, 16);
+        LocalDate today = LocalDate.of(2026, 11, 17);
+        // 예전 형식(format 6)으로 미국 부분을 채워 둔 두 날짜
+        String old = objectMapper.writeValueAsString(
+                com.jhwjhw.naverworkscloneapi.board.market.MarketReportBuilder.unavailable("미국"))
+                .replace("\"format\":" + com.jhwjhw.naverworkscloneapi.board.market.MarketReportBuilder.FORMAT,
+                        "\"format\":6");
+        for (LocalDate day : java.util.List.of(yesterday, today)) {
+            assertThat(greetingService.postIfMissing(day)).isTrue();
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                BoardDailyGreeting greeting = greetings.findById(day).orElseThrow();
+                greeting.finishUs(old, java.time.Instant.EPOCH);
+                greeting.finishNews(null, java.time.Instant.EPOCH);
+            });
+        }
+
+        // 오늘 오후 1시(한국 부분 전): 오늘 글의 미국 부분만 새 형식으로 다시 만듦
+        service(today.atTime(13, 0).atZone(SEOUL)).fillPending();
+        assertThat(greetings.findById(today).orElseThrow().getUsSection()).contains("\"format\":"
+                + com.jhwjhw.naverworkscloneapi.board.market.MarketReportBuilder.FORMAT).contains("거래대금 상위");
+        // 지난 글은 그대로(미국 순위는 그날에만 받을 수 있어 다시 만들면 빠짐)
+        assertThat(greetings.findById(yesterday).orElseThrow().getUsSection()).isEqualTo(old);
+    }
+
+    @Test
     void usStockKoreanNames() {
         assertThat(com.jhwjhw.naverworkscloneapi.board.market.UsStockNames.korean("NVDA")).isEqualTo("엔비디아");
         assertThat(com.jhwjhw.naverworkscloneapi.board.market.UsStockNames.korean("kd")).isEqualTo("킨드릴");

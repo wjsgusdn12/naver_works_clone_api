@@ -190,21 +190,24 @@ public class BoardMarketReportService {
         }
     }
 
-    // 채운 적이 없거나, 채웠지만 예전 형식이면 할 일
-    private static boolean stale(Instant doneAt, String section) {
-        return doneAt == null || (section != null && !MarketReportBuilder.isCurrent(section));
+    // 채운 적이 없으면 할 일. 채웠지만 예전 형식이면 오늘 글만 새 형식으로 다시 만듦 —
+    // 미국 순위·뉴스는 그날 그 시점에만 받을 수 있어, 지난 글을 다시 만들면 오히려 내용이 빠지기 때문.
+    private boolean stale(BoardDailyGreeting greeting, Instant doneAt, String section) {
+        if (doneAt == null) return true;
+        return section != null && !MarketReportBuilder.isCurrent(section)
+                && greeting.getGreetingDate().equals(LocalDate.now(clock.withZone(zone)));
     }
 
     private boolean needsNews(BoardDailyGreeting greeting) {
-        return newsEnabled() && stale(greeting.getNewsDoneAt(), greeting.getNewsSection());
+        return newsEnabled() && stale(greeting, greeting.getNewsDoneAt(), greeting.getNewsSection());
     }
 
     private boolean needsUs(BoardDailyGreeting greeting) {
-        return usEnabled() && stale(greeting.getUsDoneAt(), greeting.getUsSection());
+        return usEnabled() && stale(greeting, greeting.getUsDoneAt(), greeting.getUsSection());
     }
 
     private boolean krDue(BoardDailyGreeting greeting, ZonedDateTime now) {
-        return krEnabled() && stale(greeting.getKrDoneAt(), greeting.getKrSection())
+        return krEnabled() && stale(greeting, greeting.getKrDoneAt(), greeting.getKrSection())
                 && (greeting.getGreetingDate().isBefore(now.toLocalDate()) || !now.toLocalTime().isBefore(koreaAt));
     }
 

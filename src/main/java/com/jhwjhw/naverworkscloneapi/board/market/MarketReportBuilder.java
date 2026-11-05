@@ -34,7 +34,8 @@ public final class MarketReportBuilder {
 
     // 만든 부분의 형식 번호. 보고 모양을 바꾸면 올려서, 예전 형식으로 저장된 지난 글을 새 형식으로 다시 만들게 함.
     // (저장해 둔 부분 JSON에만 남고, 게시글 본문에서는 본문 검사가 떼어 냄)
-    public static final int FORMAT = 6;
+    // 7: 순위 4칸(상승률·하락률·거래량·거래대금) + 미국 종목 한글명. 올리면 오늘 글만 새 형식으로 다시 만듦.
+    public static final int FORMAT = 7;
     private static final String FORMAT_MARK = "\"format\":" + FORMAT;
 
     public static boolean isCurrent(String sectionJson) {
