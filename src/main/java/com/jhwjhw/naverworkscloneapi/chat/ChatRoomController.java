@@ -185,9 +185,11 @@ public class ChatRoomController {
   @PostMapping(value = "/message/attachment/create", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public ApiResponse<ChatRoomResponse.Message> sendAttachment(@AuthenticationPrincipal Jwt jwt,
       @RequestParam Long chatRoomId, @RequestParam MultipartFile file,
-      @RequestParam(required = false) Long replyToMessageId) {
+      @RequestParam(required = false) Long replyToMessageId,
+      // 사진 묶어 보내기: 같은 묶음의 사진마다 같은 UUID
+      @RequestParam(required = false) String bundleKey) {
     return ApiResponse.success("CHAT_ATTACHMENT_CREATED", "파일을 전송했습니다.",
-        service.sendAttachment(id(jwt), chatRoomId, file, replyToMessageId));
+        service.sendAttachment(id(jwt), chatRoomId, file, replyToMessageId, bundleKey));
   }
 
   // 방 상세의 사진·파일 모아보기. kind는 IMAGE 또는 FILE.

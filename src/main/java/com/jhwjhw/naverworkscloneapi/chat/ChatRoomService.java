@@ -509,6 +509,19 @@ public class ChatRoomService {
     }
 
     // 답장할 원문을 찾아 검사. 답장이 아니면 null.
+    // 묶음 번호는 브라우저가 만들므로 형식·주인·크기를 확인(남의 묶음에 끼워 넣기 방지).
+    private void checkBundle(Long roomId, Long requesterId, String bundle) {
+        if (!BUNDLE_KEY.matcher(bundle).matches()) {
+            throw new ChatException("CHAT_BUNDLE_INVALID", "사진 묶음 정보가 올바르지 않습니다.");
+        }
+        if (messageRepository.existsByChatRoomIdAndBundleKeyAndSenderMembershipIdNot(roomId, bundle, requesterId)) {
+            throw new ChatException("CHAT_BUNDLE_INVALID", "사진 묶음 정보가 올바르지 않습니다.");
+        }
+        if (messageRepository.countByChatRoomIdAndBundleKey(roomId, bundle) >= BUNDLE_MAX) {
+            throw new ChatException("CHAT_BUNDLE_TOO_LARGE", "사진은 한 묶음에 " + BUNDLE_MAX + "장까지 보낼 수 있습니다.");
+        }
+    }
+
     private ChatMessage replyOriginal(Long roomId, Long replyToMessageId) {
         if (replyToMessageId == null) return null;
         ChatMessage original = requireRoomMessage(roomId, replyToMessageId);
@@ -524,16 +537,35 @@ public class ChatRoomService {
     @Transactional
     public ChatRoomResponse.Message sendAttachment(Long requesterId, Long roomId, MultipartFile file,
             Long replyToMessageId) {
+        return sendAttachment(requesterId, roomId, file, replyToMessageId, null);
+    }
+
+    // 묶음 한 개에 담을 수 있는 사진 수(화면 격자가 너무 커지지 않게)
+    static final int BUNDLE_MAX = 30;
+    private static final java.util.regex.Pattern BUNDLE_KEY =
+            java.util.regex.Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
+    // bundleKey: 사진 묶어 보내기면 브라우저가 만든 UUID(묶음 안 사진마다 같은 값). 사진만, 같은 사람만, 30장까지.
+    @Transactional
+    public ChatRoomResponse.Message sendAttachment(Long requesterId, Long roomId, MultipartFile file,
+            Long replyToMessageId, String bundleKey) {
         ChatRoomMember sender = active(roomId, requesterId);
         ChatRoom room = sender.getChatRoom();
         requireOpen(room);
         // 권한·답장·업로드 한도 검사를 먼저 끝내고 나서 디스크에 저장.
         ChatMessage original = replyOriginal(roomId, replyToMessageId);
+        String bundle = bundleKey == null || bundleKey.isBlank() ? null : bundleKey.strip().toLowerCase(Locale.ROOT);
+        if (bundle != null) checkBundle(roomId, requesterId, bundle);
         uploadLimiter.check(requesterId, file == null ? 0 : file.getSize());
         ChatAttachmentStore.StoredFile stored = attachmentStore.store(file);
+        if (bundle != null && stored.kind() != ChatAttachmentKind.IMAGE) {
+            // 예외로 트랜잭션이 되돌려지면 방금 저장한 파일은 ChatAttachmentStore가 지움
+            throw new ChatException("CHAT_BUNDLE_IMAGE_ONLY", "사진만 묶어 보낼 수 있습니다.");
+        }
         String content = stored.kind() == ChatAttachmentKind.IMAGE ? "사진" : stored.name();
         ChatMessage message = new ChatMessage(room, sender.getMembership(), content, ChatMessageType.TEXT);
         if (original != null) message.replyTo(original);
+        if (bundle != null) message.bundle(bundle);
         ChatMessageAttachment attachment = new ChatMessageAttachment(message, stored.kind(), stored.name(),
                 stored.contentType(), stored.size(), stored.key(), stored.width(), stored.height(),
                 stored.thumbnailKey());
@@ -1205,7 +1237,7 @@ public class ChatRoomService {
                 reply, message.getEditedAt(), message.getDeletedAt(), message.getVersion(), reactions,
                 message.getForwardedFromMessageId() != null,
                 // 삭제된 메시지는 첨부도 감춤.
-                deleted || attachment == null ? null : attachment(attachment));
+                deleted || attachment == null ? null : attachment(attachment), message.getBundleKey());
     }
 
     private ChatRoomResponse.Attachment attachment(ChatMessageAttachment attachment) {

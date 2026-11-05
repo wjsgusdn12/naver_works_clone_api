@@ -99,8 +99,16 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
             + "select max(innerMessage.id) from ChatMessage innerMessage where innerMessage.chatRoom.id in :roomIds group by innerMessage.chatRoom.id)")
     List<ChatMessage> findLatestByChatRoomIdIn(@Param("roomIds") List<Long> roomIds);
 
-    // 목록의 안 읽음 수와 가장 오래된 안 읽음 시각을 방별로 집계.
-    @Query("select message.chatRoom.id as roomId, count(message) as unreadCount, min(message.createdAt) as oldestUnreadMessageAt "
+    // 사진 묶음 확인(남의 묶음 번호인지 · 이미 몇 장인지)
+    boolean existsByChatRoomIdAndBundleKeyAndSenderMembershipIdNot(Long chatRoomId, String bundleKey,
+            Long senderMembershipId);
+
+    long countByChatRoomIdAndBundleKey(Long chatRoomId, String bundleKey);
+
+    // 목록의 안 읽음 수와 가장 오래된 안 읽음 시각을 방별로 집계. 묶어 보낸 사진은 묶음 하나를 1개로 셈.
+    @Query("select message.chatRoom.id as roomId, "
+            + "count(distinct coalesce(message.bundleKey, cast(message.id as String))) as unreadCount, "
+            + "min(message.createdAt) as oldestUnreadMessageAt "
             + "from ChatMessage message, ChatRoomMember member where message.chatRoom.id in :roomIds "
             + "and member.chatRoom.id = message.chatRoom.id and member.membership.id = :membershipId and member.leftAt is null "
             + "and message.messageType = :messageType and message.deletedAt is null and message.senderMembership.id <> :membershipId "
@@ -118,7 +126,8 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
             @Param("messageType") ChatMessageType messageType);
 
     // 읽지 않은 일반 텍스트만 집계. 시스템 안내문은 안 읽은 수에 포함하지 않음.
-    @Query("select count(message) from ChatMessage message where message.chatRoom.id = :roomId "
+    @Query("select count(distinct coalesce(message.bundleKey, cast(message.id as String))) from ChatMessage message "
+            + "where message.chatRoom.id = :roomId "
             + "and message.messageType = :messageType and message.deletedAt is null and message.senderMembership.id <> :membershipId "
             + "and (:lastReadMessageId is null or message.id > :lastReadMessageId)")
     long countUnread(@Param("roomId") Long roomId, @Param("membershipId") Long membershipId,

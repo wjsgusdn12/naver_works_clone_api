@@ -62,6 +62,10 @@ public class ChatMessage {
     @Column(name = "forwarded_from_message_id")
     private Long forwardedFromMessageId;
 
+    // 사진 묶어 보내기의 묶음 번호(같은 번호의 사진들은 화면에서 한 말풍선). 묶지 않았으면 null.
+    @Column(name = "bundle_key", length = 36)
+    private String bundleKey;
+
     // 메시지 본문과 분리해 저장한 멘션 대상. @All은 서버에서 활성 구성원 ID로 확장한다.
     @ElementCollection
     @CollectionTable(name = "chat_message_mention", joinColumns = @JoinColumn(name = "chat_message_id"))
@@ -81,6 +85,10 @@ public class ChatMessage {
 
     public void mention(Set<Long> membershipIds) {
         this.mentionedMembershipIds = new LinkedHashSet<>(membershipIds);
+    }
+
+    public void bundle(String bundleKey) {
+        this.bundleKey = bundleKey;
     }
 
     public void replyTo(ChatMessage original) {

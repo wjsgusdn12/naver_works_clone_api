@@ -53,7 +53,7 @@ public record ChatRoomResponse() {
             Instant createdAt,
             long unreadCount, long readCount, List<Long> mentionedMembershipIds, Reply reply,
             Instant editedAt, Instant deletedAt, long version, List<Reaction> reactions, boolean forwarded,
-            Attachment attachment) {
+            Attachment attachment, String bundleKey) {
     }
 
     // 사진·파일 메시지의 첨부 정보. 일반 텍스트나 삭제된 메시지면 null.
