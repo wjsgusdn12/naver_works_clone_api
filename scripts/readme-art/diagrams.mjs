@@ -433,7 +433,7 @@ const roadmap = () => {
     zone({ x: 480, y: 36, w: 450, h: 330, label: "다음 계획", tone: "slate", iconName: "CircleDashed" }),
   ];
   const plans = [
-    ["Rocket", "무료 배포", "Oracle VM · nginx · api 2대 · Vercel · Supabase"],
+    ["Rocket", "AWS 배포", "EC2 1대(nginx · api · Redis) · S3 · Vercel · Supabase"],
     ["Network", "채팅 방송도 Redis로", "서버 2대에서 메시지가 모두에게 가도록"],
     ["CalendarClock", "일정 · 회의실 예약", "겹치는 예약 막기(동시성 제어)"],
     ["Gauge", "관측 · 부하 시험", "Prometheus · Grafana · k6"],
